@@ -44,9 +44,10 @@ class TextClassifier {
     }
 }
 
-class ImageCaptioner {
+class ImageOCR {
     private static instance: Promise<PipelineInstance> | null = null;
-    private static readonly MODEL = 'Xenova/vit-gpt2-image-captioning';
+    // Florence-2 for OCR - can extract text from full screenshots
+    private static readonly MODEL = 'Xenova/florence-2-base-ft';
 
     static async getInstance(): Promise<PipelineInstance> {
         if (!this.instance) {
@@ -63,10 +64,13 @@ async function classifyText(text: string): Promise<ClassificationResult[]> {
     return result as ClassificationResult[];
 }
 
-// Image captioning
-async function captionImage(imageData: string): Promise<ImageCaptionResult[]> {
-    const captioner = await ImageCaptioner.getInstance();
-    const result = await captioner(imageData);
+// OCR - Extract text from image
+async function extractTextFromImage(imageData: string): Promise<ImageCaptionResult[]> {
+    const ocr = await ImageOCR.getInstance();
+    // Use OCR task prompt for Florence-2
+    const result = await ocr(imageData, {
+        max_new_tokens: 1024,
+    });
     return result as ImageCaptionResult[];
 }
 
@@ -157,7 +161,7 @@ chrome.runtime.onMessage.addListener((
                     return { success: true, dataUrl };
                 }
                 case 'analyze-image': {
-                    const analysis = await captionImage(message.imageData);
+                    const analysis = await extractTextFromImage(message.imageData);
                     return { success: true, analysis };
                 }
                 default:
