@@ -46,8 +46,8 @@ class TextClassifier {
 
 class ImageOCR {
     private static instance: Promise<PipelineInstance> | null = null;
-    // Florence-2 for OCR - can extract text from full screenshots
-    private static readonly MODEL = 'Xenova/florence-2-base-ft';
+    // TrOCR for printed text OCR
+    private static readonly MODEL = 'Xenova/trocr-small-printed';
 
     static async getInstance(): Promise<PipelineInstance> {
         if (!this.instance) {
