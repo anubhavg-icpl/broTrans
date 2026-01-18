@@ -1,23 +1,35 @@
 // popup.js - handles interaction with the extension's popup
 
-// DOM Elements
+// DOM Elements - Sentiment Tab
 const textInput = document.getElementById('text');
 const charCount = document.getElementById('char-count');
 const analyzeBtn = document.getElementById('analyze-btn');
-const statusBadge = document.getElementById('status-badge');
-const statusText = document.getElementById('status-text');
-const progressContainer = document.getElementById('progress-container');
-const progressFill = document.getElementById('progress-fill');
-const progressText = document.getElementById('progress-text');
 const resultContainer = document.getElementById('result-container');
 const resultIcon = document.getElementById('result-icon');
 const resultLabel = document.getElementById('result-label');
 const scoreValue = document.getElementById('score-value');
 const confidenceFill = document.getElementById('confidence-fill');
 
+// DOM Elements - Screenshot Tab
+const captureBtn = document.getElementById('capture-btn');
+const screenshotPreview = document.getElementById('screenshot-preview');
+const screenshotImg = document.getElementById('screenshot-img');
+const screenshotResult = document.getElementById('screenshot-result');
+const analysisText = document.getElementById('analysis-text');
+
+// DOM Elements - Shared
+const statusBadge = document.getElementById('status-badge');
+const statusText = document.getElementById('status-text');
+const progressContainer = document.getElementById('progress-container');
+const progressFill = document.getElementById('progress-fill');
+const progressText = document.getElementById('progress-text');
+const tabBtns = document.querySelectorAll('.tab-btn');
+const tabContents = document.querySelectorAll('.tab-content');
+
 // State
 let modelReady = false;
 let isAnalyzing = false;
+let isCapturing = false;
 
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
@@ -27,13 +39,36 @@ document.addEventListener('DOMContentLoaded', () => {
     // Set up event listeners
     textInput.addEventListener('input', handleTextInput);
     analyzeBtn.addEventListener('click', handleAnalyze);
+    captureBtn.addEventListener('click', handleCapture);
+
     textInput.addEventListener('keydown', (e) => {
         if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
             handleAnalyze();
         }
     });
+
+    // Tab switching
+    tabBtns.forEach(btn => {
+        btn.addEventListener('click', () => {
+            const tabName = btn.dataset.tab;
+            switchTab(tabName);
+        });
+    });
 });
+
+// Switch tabs
+function switchTab(tabName) {
+    // Update tab buttons
+    tabBtns.forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.tab === tabName);
+    });
+
+    // Update tab contents
+    tabContents.forEach(content => {
+        content.classList.toggle('active', content.id === `${tabName}-tab`);
+    });
+}
 
 // Load the model
 async function loadModel() {
@@ -116,7 +151,7 @@ async function handleAnalyze() {
     }
 }
 
-// Display the result
+// Display the sentiment result
 function displayResult(result) {
     const isPositive = result.label === 'POSITIVE';
     const score = Math.round(result.score * 100);
@@ -140,4 +175,51 @@ function displayResult(result) {
 
     // Show result
     resultContainer.classList.remove('hidden');
+}
+
+// Handle capture button click
+async function handleCapture() {
+    if (isCapturing) return;
+
+    isCapturing = true;
+    captureBtn.disabled = true;
+    captureBtn.classList.add('loading');
+    captureBtn.querySelector('span').textContent = 'Capturing...';
+
+    // Hide previous result
+    screenshotResult.classList.add('hidden');
+
+    try {
+        // Capture and analyze screenshot
+        const response = await chrome.runtime.sendMessage({
+            action: 'analyze-screenshot'
+        });
+
+        if (response.success) {
+            // Display screenshot
+            screenshotImg.src = response.dataUrl;
+            screenshotImg.classList.remove('hidden');
+            screenshotPreview.querySelector('.screenshot-placeholder').style.display = 'none';
+
+            // Display analysis
+            if (response.analysis && response.analysis.length > 0) {
+                const caption = response.analysis[0].generated_text;
+                analysisText.textContent = caption;
+                screenshotResult.classList.remove('hidden');
+            }
+        } else {
+            console.error('Screenshot error:', response.error);
+            analysisText.textContent = 'Error: ' + response.error;
+            screenshotResult.classList.remove('hidden');
+        }
+    } catch (error) {
+        console.error('Capture error:', error);
+        analysisText.textContent = 'Error capturing screenshot. Make sure you have an active tab.';
+        screenshotResult.classList.remove('hidden');
+    } finally {
+        isCapturing = false;
+        captureBtn.classList.remove('loading');
+        captureBtn.querySelector('span').textContent = 'Capture & Analyze';
+        captureBtn.disabled = false;
+    }
 }

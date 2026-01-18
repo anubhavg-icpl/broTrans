@@ -1,10 +1,11 @@
 {
   "manifest_version": 3,
   "name": "BroTrans",
-  "description": "AI-powered sentiment analysis running locally in your browser. Analyze text emotions instantly with no server required.",
+  "description": "AI-powered sentiment analysis and screenshot captioning running locally in your browser. No server required.",
   "version": "1.0.0",
   "permissions": [
     "activeTab",
+    "tabs",
     "scripting",
     "contextMenus",
     "storage",

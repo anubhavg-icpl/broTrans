@@ -2,30 +2,58 @@
 
 import { pipeline } from '@huggingface/transformers';
 
-class PipelineSingleton {
+// Text classification pipeline for sentiment analysis
+class TextPipelineSingleton {
     static task = 'text-classification';
     static model = 'Xenova/distilbert-base-uncased-finetuned-sst-2-english';
     static instance = null;
 
     static async getInstance(progress_callback = null) {
         this.instance ??= pipeline(this.task, this.model, { progress_callback });
-
         return this.instance;
     }
 }
 
-// Create generic classify function, which will be reused for the different types of events.
-const classify = async (text) => {
-    // Get the pipeline instance. This will load and build the model when run for the first time.
-    let model = await PipelineSingleton.getInstance((data) => {
-        // You can track the progress of the pipeline creation here.
-        // e.g., you can send `data` back to the UI to indicate a progress bar
-        // console.log('progress', data)
-    });
+// Image captioning pipeline for screenshot analysis
+class ImagePipelineSingleton {
+    static task = 'image-to-text';
+    static model = 'Xenova/vit-gpt2-image-captioning';
+    static instance = null;
 
-    // Actually run the model on the input text
+    static async getInstance(progress_callback = null) {
+        this.instance ??= pipeline(this.task, this.model, { progress_callback });
+        return this.instance;
+    }
+}
+
+// Text classification function for sentiment analysis
+const classify = async (text) => {
+    let model = await TextPipelineSingleton.getInstance((data) => {
+        // Track progress of model loading
+    });
     let result = await model(text);
     return result;
+};
+
+// Image analysis function for screenshot captioning
+const analyzeImage = async (imageDataUrl) => {
+    let model = await ImagePipelineSingleton.getInstance((data) => {
+        // Track progress of model loading
+    });
+    let result = await model(imageDataUrl);
+    return result;
+};
+
+// Capture screenshot of current tab
+const captureScreenshot = async () => {
+    try {
+        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: 'png' });
+        return dataUrl;
+    } catch (error) {
+        console.error('Screenshot capture error:', error);
+        throw error;
+    }
 };
 
 ////////////////////// 1. Context Menus //////////////////////
@@ -63,24 +91,59 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 //////////////////////////////////////////////////////////////
 
 ////////////////////// 2. Message Events /////////////////////
-// 
+//
 // Listen for messages from the UI, process it, and send the result back.
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    console.log('sender', sender)
-    if (message.action !== 'classify') return; // Ignore messages that are not meant for classification.
+    console.log('Message received:', message.action);
 
-    // Run model prediction asynchronously
-    (async function () {
-        // Perform classification
-        let result = await classify(message.text);
+    if (message.action === 'classify') {
+        // Text sentiment classification
+        (async function () {
+            let result = await classify(message.text);
+            sendResponse(result);
+        })();
+        return true;
+    }
 
-        // Send response back to UI
-        sendResponse(result);
-    })();
+    if (message.action === 'screenshot') {
+        // Capture screenshot only
+        (async function () {
+            try {
+                let dataUrl = await captureScreenshot();
+                sendResponse({ success: true, dataUrl });
+            } catch (error) {
+                sendResponse({ success: false, error: error.message });
+            }
+        })();
+        return true;
+    }
 
-    // return true to indicate we will send a response asynchronously
-    // see https://stackoverflow.com/a/46628145 for more information
-    return true;
+    if (message.action === 'analyze-screenshot') {
+        // Capture and analyze screenshot
+        (async function () {
+            try {
+                let dataUrl = await captureScreenshot();
+                let analysis = await analyzeImage(dataUrl);
+                sendResponse({ success: true, dataUrl, analysis });
+            } catch (error) {
+                sendResponse({ success: false, error: error.message });
+            }
+        })();
+        return true;
+    }
+
+    if (message.action === 'analyze-image') {
+        // Analyze provided image data
+        (async function () {
+            try {
+                let analysis = await analyzeImage(message.imageData);
+                sendResponse({ success: true, analysis });
+            } catch (error) {
+                sendResponse({ success: false, error: error.message });
+            }
+        })();
+        return true;
+    }
 });
 //////////////////////////////////////////////////////////////
 
