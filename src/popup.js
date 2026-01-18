@@ -3,9 +3,12 @@
 
 import { pipeline, env } from '@huggingface/transformers';
 
-// Configure transformers.js for browser
+// Configure transformers.js for Chrome extension
 env.allowLocalModels = false;
 env.useBrowserCache = true;
+
+// Use local WASM files (bundled with extension)
+env.backends.onnx.wasm.wasmPaths = chrome.runtime.getURL('/');
 
 // DOM Elements
 const statusBadge = document.getElementById('status-badge');

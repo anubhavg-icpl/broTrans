@@ -38,6 +38,15 @@ const config = {
                     from: 'src/popup.css',
                     to: 'popup.css',
                 },
+                // Copy ONNX runtime WASM files for local loading
+                {
+                    from: 'node_modules/@huggingface/transformers/dist/*.wasm',
+                    to: '[name][ext]',
+                },
+                {
+                    from: 'node_modules/@huggingface/transformers/dist/*.mjs',
+                    to: '[name][ext]',
+                },
             ],
         }),
     ],
