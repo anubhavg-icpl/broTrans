@@ -1,4 +1,5 @@
-// popup.js - BroTrans Gmail Assistant with Gemini Nano
+// popup.js - BroTrans Gmail Assistant with Chrome Built-in AI (Gemini Nano)
+// AI runs directly in popup (not service worker - API limitation)
 
 // DOM Elements
 const statusBadge = document.getElementById('status-badge');
@@ -12,12 +13,23 @@ const charCount = document.getElementById('char-count');
 const quickActions = document.querySelectorAll('.quick-action');
 
 // State
+let aiSession = null;
 let aiReady = false;
 let isGenerating = false;
 
+// System prompt
+const SYSTEM_PROMPT = `You are BroTrans, a helpful Gmail assistant. Be concise.
+
+When users want to perform an action, respond with JSON:
+{"action": "ACTION_NAME", "params": {}}
+
+Actions: summarize_inbox, summarize_email, filter_unread, search (params: query), analyze_sentiment, draft_reply (params: text), open_email (params: index), scroll (params: direction)
+
+Otherwise respond conversationally.`;
+
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
-    checkAI();
+    initAI();
 
     userInput.addEventListener('input', handleInput);
     userInput.addEventListener('keydown', handleKeydown);
@@ -28,34 +40,58 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 });
 
-// Check AI availability
-async function checkAI() {
+// Check AI availability and initialize
+async function initAI() {
     updateStatus('loading', 'Checking AI...');
 
+    // Check if API exists (new global namespace)
+    if (typeof LanguageModel === 'undefined' && typeof ai === 'undefined') {
+        updateStatus('error', 'AI not available');
+        statusDetail.innerHTML = `Enable at:<br>chrome://flags/#prompt-api-for-gemini-nano<br>Then restart Chrome`;
+        return;
+    }
+
     try {
-        const response = await chrome.runtime.sendMessage({ action: 'check_ai' });
+        // Try new API first (LanguageModel global), then fallback to ai.languageModel
+        const api = typeof LanguageModel !== 'undefined' ? LanguageModel :
+                    (typeof ai !== 'undefined' && ai.languageModel ? ai.languageModel : null);
 
-        if (response?.available) {
-            // AI available, now load it
-            updateStatus('loading', 'Loading Gemini Nano...');
-            const loadResult = await chrome.runtime.sendMessage({ action: 'load_model' });
-
-            if (loadResult?.success) {
-                aiReady = true;
-                updateStatus('ready', 'Ready');
-                statusDetail.textContent = '';
-                enableInputs();
-            } else {
-                updateStatus('error', 'Load failed');
-                statusDetail.textContent = loadResult?.error || 'Unknown error';
-            }
-        } else {
-            updateStatus('error', 'AI not available');
-            statusDetail.textContent = response?.error || 'Enable Gemini Nano in chrome://flags';
+        if (!api) {
+            throw new Error('No AI API found');
         }
+
+        updateStatus('loading', 'Checking model...');
+
+        // Check availability
+        const availability = await api.availability();
+        console.log('[BroTrans] AI availability:', availability);
+
+        if (availability === 'unavailable' || availability === 'no') {
+            updateStatus('error', 'Model unavailable');
+            statusDetail.textContent = 'Gemini Nano not supported on this device';
+            return;
+        }
+
+        if (availability === 'downloadable' || availability === 'after-download') {
+            updateStatus('loading', 'Model downloading...');
+            statusDetail.textContent = 'Go to chrome://components and update "Optimization Guide On Device Model"';
+        }
+
+        // Create session
+        updateStatus('loading', 'Loading model...');
+        aiSession = await api.create({
+            systemPrompt: SYSTEM_PROMPT
+        });
+
+        aiReady = true;
+        updateStatus('ready', 'Ready');
+        statusDetail.textContent = '';
+        enableInputs();
+        console.log('[BroTrans] AI ready');
+
     } catch (error) {
-        console.error('[BroTrans] Check AI error:', error);
-        updateStatus('error', 'Error');
+        console.error('[BroTrans] AI init error:', error);
+        updateStatus('error', 'Init failed');
         statusDetail.textContent = error.message;
     }
 }
@@ -79,7 +115,6 @@ function handleInput(e) {
     const text = e.target.value;
     charCount.textContent = text.length > 0 ? text.length + ' chars' : '';
 
-    // Auto-resize
     userInput.style.height = 'auto';
     userInput.style.height = Math.min(userInput.scrollHeight, 100) + 'px';
 
@@ -124,6 +159,32 @@ async function handleQuickAction(action) {
     await generateResponse(message);
 }
 
+// Get email context from Gmail
+async function getEmailContext() {
+    try {
+        const response = await chrome.runtime.sendMessage({ action: 'get_email_context' });
+        return response?.emailContext || null;
+    } catch (e) {
+        console.warn('[BroTrans] Could not get email context:', e);
+        return null;
+    }
+}
+
+// Execute action in Gmail
+async function executeAction(action) {
+    if (!action?.action) return null;
+    try {
+        return await chrome.runtime.sendMessage({
+            action: 'execute_action',
+            gmailAction: action.action,
+            params: action.params || {}
+        });
+    } catch (e) {
+        console.warn('[BroTrans] Could not execute action:', e);
+        return { error: e.message };
+    }
+}
+
 // Generate response
 async function generateResponse(userMessage) {
     isGenerating = true;
@@ -133,23 +194,64 @@ async function generateResponse(userMessage) {
     const msgEl = addMessage('', 'assistant', true);
 
     try {
-        const response = await chrome.runtime.sendMessage({
-            action: 'chat',
-            userMessage,
-        });
+        // Get email context
+        const emailContext = await getEmailContext();
 
-        if (response?.success) {
-            msgEl.innerHTML = formatMessage(response.response);
-
-            if (response.actionResult) {
-                handleActionResult(response.actionResult);
-            }
-        } else {
-            msgEl.innerHTML = formatMessage(`Error: ${response?.error || 'Unknown error'}`);
+        // Build prompt with context
+        let prompt = userMessage;
+        if (emailContext?.emails?.length > 0) {
+            prompt += '\n\nInbox:\n' + emailContext.emails.slice(0, 10).map((e, i) =>
+                `${i + 1}. ${e.unread ? '[UNREAD] ' : ''}From: ${e.sender} | ${e.subject}`
+            ).join('\n');
         }
+        if (emailContext?.openEmail) {
+            const e = emailContext.openEmail;
+            prompt += `\n\nOpen email:\nFrom: ${e.sender}\nSubject: ${e.subject}\n${e.body?.slice(0, 300)}...`;
+        }
+
+        // Generate response
+        const response = await aiSession.prompt(prompt);
+
+        // Parse action
+        let action = null;
+        const actionMatch = response.match(/\{[\s\S]*?"action"[\s\S]*?\}/);
+        if (actionMatch) {
+            try {
+                action = JSON.parse(actionMatch[0]);
+            } catch (e) { }
+        }
+
+        // Clean response
+        let cleanResponse = response;
+        if (action) {
+            cleanResponse = response.replace(/\{[\s\S]*?"action"[\s\S]*?\}/, '').trim();
+            if (!cleanResponse) {
+                cleanResponse = `Executing: ${action.action}`;
+            }
+        }
+
+        msgEl.innerHTML = formatMessage(cleanResponse);
+
+        // Execute action
+        if (action) {
+            const result = await executeAction(action);
+            if (result) {
+                handleActionResult(result);
+            }
+        }
+
     } catch (error) {
         console.error('[BroTrans] Generate error:', error);
         msgEl.innerHTML = formatMessage(`Error: ${error.message}`);
+
+        // Reset session on error
+        if (error.message.includes('session') || error.message.includes('destroyed')) {
+            aiSession = null;
+            aiReady = false;
+            updateStatus('error', 'Session expired');
+            statusDetail.textContent = 'Refresh to restart';
+            return;
+        }
     } finally {
         isGenerating = false;
         updateStatus('ready', 'Ready');
