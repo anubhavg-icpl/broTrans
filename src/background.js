@@ -47,8 +47,29 @@ const analyzeImage = async (imageDataUrl) => {
 // Capture screenshot of current tab
 const captureScreenshot = async () => {
     try {
-        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-        const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: 'png' });
+        // Get the last focused window (not popup)
+        const windows = await chrome.windows.getAll({ windowTypes: ['normal'] });
+        let targetWindow = null;
+
+        // Find the focused normal window
+        for (const win of windows) {
+            if (win.focused) {
+                targetWindow = win;
+                break;
+            }
+        }
+
+        // If no focused window, use the first normal window
+        if (!targetWindow && windows.length > 0) {
+            targetWindow = windows[0];
+        }
+
+        if (!targetWindow) {
+            throw new Error('No browser window found');
+        }
+
+        // Capture the visible tab in that window
+        const dataUrl = await chrome.tabs.captureVisibleTab(targetWindow.id, { format: 'png' });
         return dataUrl;
     } catch (error) {
         console.error('Screenshot capture error:', error);
