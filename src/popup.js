@@ -177,30 +177,71 @@ function displayResult(result) {
     resultContainer.classList.remove('hidden');
 }
 
-// Handle capture button click
+// Handle capture button click - using Screen Capture API
 async function handleCapture() {
     if (isCapturing) return;
 
     isCapturing = true;
     captureBtn.disabled = true;
     captureBtn.classList.add('loading');
-    captureBtn.querySelector('span').textContent = 'Capturing...';
+    captureBtn.querySelector('span').textContent = 'Select screen...';
 
     // Hide previous result
     screenshotResult.classList.add('hidden');
 
     try {
-        // Capture and analyze screenshot
+        // Use Screen Capture API - opens picker for user to select
+        const stream = await navigator.mediaDevices.getDisplayMedia({
+            video: {
+                displaySurface: 'browser'
+            },
+            preferCurrentTab: true
+        });
+
+        captureBtn.querySelector('span').textContent = 'Capturing...';
+
+        // Create video element to capture frame
+        const video = document.createElement('video');
+        video.srcObject = stream;
+        video.autoplay = true;
+
+        await new Promise((resolve) => {
+            video.onloadedmetadata = () => {
+                video.play();
+                resolve();
+            };
+        });
+
+        // Wait a moment for the video to render
+        await new Promise(resolve => setTimeout(resolve, 100));
+
+        // Capture frame to canvas
+        const canvas = document.createElement('canvas');
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(video, 0, 0);
+
+        // Stop the stream
+        stream.getTracks().forEach(track => track.stop());
+
+        // Get data URL
+        const dataUrl = canvas.toDataURL('image/png');
+
+        // Display screenshot
+        screenshotImg.src = dataUrl;
+        screenshotImg.classList.remove('hidden');
+        screenshotPreview.querySelector('.screenshot-placeholder').style.display = 'none';
+
+        captureBtn.querySelector('span').textContent = 'Analyzing...';
+
+        // Send to background for analysis
         const response = await chrome.runtime.sendMessage({
-            action: 'analyze-screenshot'
+            action: 'analyze-image',
+            imageData: dataUrl
         });
 
         if (response.success) {
-            // Display screenshot
-            screenshotImg.src = response.dataUrl;
-            screenshotImg.classList.remove('hidden');
-            screenshotPreview.querySelector('.screenshot-placeholder').style.display = 'none';
-
             // Display analysis
             if (response.analysis && response.analysis.length > 0) {
                 const caption = response.analysis[0].generated_text;
@@ -208,13 +249,17 @@ async function handleCapture() {
                 screenshotResult.classList.remove('hidden');
             }
         } else {
-            console.error('Screenshot error:', response.error);
-            analysisText.textContent = 'Error: ' + response.error;
+            console.error('Analysis error:', response.error);
+            analysisText.textContent = 'Error analyzing image: ' + response.error;
             screenshotResult.classList.remove('hidden');
         }
     } catch (error) {
         console.error('Capture error:', error);
-        analysisText.textContent = 'Error capturing screenshot. Make sure you have an active tab.';
+        if (error.name === 'NotAllowedError') {
+            analysisText.textContent = 'Screen capture was cancelled.';
+        } else {
+            analysisText.textContent = 'Error: ' + error.message;
+        }
         screenshotResult.classList.remove('hidden');
     } finally {
         isCapturing = false;
