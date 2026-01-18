@@ -1,4 +1,3 @@
-
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -8,38 +7,43 @@ import CopyPlugin from 'copy-webpack-plugin';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const config = {
-    mode: 'development',
-    devtool: 'inline-source-map',
+    mode: 'production',
+    devtool: 'source-map',
     entry: {
-        background: {
-            import: './src/background.js',
-            chunkLoading: `import-scripts`,
-        },
         popup: './src/popup.js',
+        background: './src/background.js',
         content: './src/content.js',
     },
     output: {
         path: path.resolve(__dirname, 'build'),
         filename: '[name].js',
+        clean: true,
+    },
+    resolve: {
+        extensions: ['.js', '.json'],
     },
     plugins: [
         new HtmlWebpackPlugin({
             template: './src/popup.html',
             filename: 'popup.html',
+            chunks: ['popup'],
         }),
         new CopyPlugin({
             patterns: [
                 {
-                    from: "public",
-                    to: "." // Copies to build folder
+                    from: 'public',
+                    to: '.',
                 },
                 {
-                    from: "src/popup.css",
-                    to: "popup.css"
-                }
+                    from: 'src/popup.css',
+                    to: 'popup.css',
+                },
             ],
-        })
+        }),
     ],
+    optimization: {
+        minimize: true,
+    },
 };
 
 export default config;

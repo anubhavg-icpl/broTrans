@@ -1,143 +1,339 @@
-// popup.js - handles interaction with the extension's popup
+// popup.js - BroTrans Gmail Assistant with Transformers.js
+// Uses SmolLM-360M-Instruct for local AI inference
+
+import { pipeline, env } from '@huggingface/transformers';
+
+// Configure transformers.js for browser
+env.allowLocalModels = false;
+env.useBrowserCache = true;
 
 // DOM Elements
-const textInput = document.getElementById('text');
-const charCount = document.getElementById('char-count');
-const analyzeBtn = document.getElementById('analyze-btn');
 const statusBadge = document.getElementById('status-badge');
 const statusText = document.getElementById('status-text');
-const progressContainer = document.getElementById('progress-container');
-const progressFill = document.getElementById('progress-fill');
-const progressText = document.getElementById('progress-text');
-const resultContainer = document.getElementById('result-container');
-const resultIcon = document.getElementById('result-icon');
-const resultLabel = document.getElementById('result-label');
-const scoreValue = document.getElementById('score-value');
-const confidenceFill = document.getElementById('confidence-fill');
+const statusDetail = document.getElementById('status-detail');
+const chatContainer = document.getElementById('chat-container');
+const chatMessages = document.getElementById('chat-messages');
+const userInput = document.getElementById('user-input');
+const sendBtn = document.getElementById('send-btn');
+const charCount = document.getElementById('char-count');
+const quickActions = document.querySelectorAll('.quick-action');
 
 // State
-let modelReady = false;
-let isAnalyzing = false;
+let generator = null;
+let isReady = false;
+let isGenerating = false;
+
+// Model config - SmolLM is small but capable
+const MODEL_ID = 'HuggingFaceTB/SmolLM-360M-Instruct';
+
+// System prompt for Gmail assistant
+const SYSTEM_PROMPT = `You are BroTrans, a helpful Gmail assistant. Be concise and helpful.
+
+When users want to perform an action, respond with a JSON command:
+{"action": "ACTION_NAME", "params": {}}
+
+Available actions:
+- summarize_inbox: Summarize visible emails
+- summarize_email: Summarize the currently open email
+- filter_unread: Show only unread emails
+- search: Search emails (params: {query: "search terms"})
+- analyze_sentiment: Analyze the tone of the open email
+- draft_reply: Draft a reply (params: {text: "reply text"})
+- open_email: Open email by number (params: {index: 0})
+- scroll: Scroll the inbox (params: {direction: "up" or "down"})
+
+For questions or conversation, respond naturally without JSON.`;
 
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
-    // Start loading the model
-    loadModel();
+    initModel();
 
-    // Set up event listeners
-    textInput.addEventListener('input', handleTextInput);
-    analyzeBtn.addEventListener('click', handleAnalyze);
-    textInput.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter' && !e.shiftKey) {
-            e.preventDefault();
-            handleAnalyze();
-        }
+    userInput.addEventListener('input', handleInput);
+    userInput.addEventListener('keydown', handleKeydown);
+    sendBtn.addEventListener('click', handleSend);
+
+    quickActions.forEach(btn => {
+        btn.addEventListener('click', () => handleQuickAction(btn.dataset.action));
     });
 });
 
 // Load the model
-async function loadModel() {
-    updateStatus('loading', 'Loading model...');
-    progressFill.classList.add('indeterminate');
+async function initModel() {
+    updateStatus('loading', 'Loading AI model...');
+    statusDetail.textContent = 'First load downloads ~720MB (cached after)';
 
     try {
-        // Send a test message to trigger model loading
-        const response = await chrome.runtime.sendMessage({
-            action: 'classify',
-            text: 'test'
+        generator = await pipeline('text-generation', MODEL_ID, {
+            dtype: 'q4',  // 4-bit quantization for smaller size
+            device: 'wasm', // Use WASM (works everywhere)
+            progress_callback: (progress) => {
+                if (progress.status === 'downloading') {
+                    const pct = Math.round((progress.loaded / progress.total) * 100);
+                    statusDetail.textContent = `Downloading: ${pct}%`;
+                } else if (progress.status === 'loading') {
+                    statusDetail.textContent = 'Loading model into memory...';
+                }
+            }
         });
 
-        // Model loaded successfully
-        modelReady = true;
+        isReady = true;
         updateStatus('ready', 'Ready');
-        progressContainer.classList.add('hidden');
-        analyzeBtn.disabled = !textInput.value.trim();
+        statusDetail.textContent = '';
+        enableInputs();
+        console.log('[BroTrans] Model loaded successfully');
 
     } catch (error) {
-        console.error('Model load error:', error);
-        updateStatus('error', 'Failed to load');
+        console.error('[BroTrans] Model load error:', error);
+        updateStatus('error', 'Load failed');
+        statusDetail.textContent = error.message;
     }
 }
 
-// Update status badge
+// Update status display
 function updateStatus(status, text) {
     statusBadge.className = 'status-badge ' + status;
     statusText.textContent = text;
+}
 
-    if (status === 'ready') {
-        progressContainer.classList.add('hidden');
-    }
+// Enable UI inputs
+function enableInputs() {
+    userInput.disabled = false;
+    userInput.placeholder = 'Ask about your emails...';
+    sendBtn.disabled = false;
+    quickActions.forEach(btn => btn.disabled = false);
+}
+
+// Disable UI inputs
+function disableInputs() {
+    sendBtn.disabled = true;
+    quickActions.forEach(btn => btn.disabled = true);
 }
 
 // Handle text input
-function handleTextInput(e) {
+function handleInput(e) {
     const text = e.target.value;
+    charCount.textContent = text.length > 0 ? text.length + ' chars' : '';
 
-    // Update character count
-    if (text.length > 0) {
-        charCount.textContent = text.length + ' chars';
-    } else {
-        charCount.textContent = '';
-    }
+    // Auto-resize textarea
+    userInput.style.height = 'auto';
+    userInput.style.height = Math.min(userInput.scrollHeight, 100) + 'px';
 
-    // Enable/disable button
-    analyzeBtn.disabled = !modelReady || !text.trim() || isAnalyzing;
+    sendBtn.disabled = !isReady || !text.trim() || isGenerating;
 }
 
-// Handle analyze button click
-async function handleAnalyze() {
-    const text = textInput.value.trim();
-    if (!text || !modelReady || isAnalyzing) return;
+// Handle keyboard shortcuts
+function handleKeydown(e) {
+    if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        handleSend();
+    }
+}
 
-    isAnalyzing = true;
-    analyzeBtn.disabled = true;
-    analyzeBtn.classList.add('loading');
-    analyzeBtn.querySelector('span').textContent = 'Analyzing...';
+// Handle send button
+async function handleSend() {
+    const text = userInput.value.trim();
+    if (!text || !isReady || isGenerating) return;
 
-    // Hide previous result
-    resultContainer.classList.add('hidden');
+    addMessage(text, 'user');
+
+    userInput.value = '';
+    userInput.style.height = 'auto';
+    charCount.textContent = '';
+    sendBtn.disabled = true;
+
+    await generateResponse(text);
+}
+
+// Handle quick action buttons
+async function handleQuickAction(action) {
+    if (!isReady || isGenerating) return;
+
+    const messages = {
+        summarize_inbox: 'Summarize my inbox',
+        filter_unread: 'Show my unread emails',
+        summarize_email: 'Summarize the current email',
+    };
+
+    const message = messages[action] || action;
+    addMessage(message, 'user');
+    await generateResponse(message);
+}
+
+// Get email context from Gmail via background script
+async function getEmailContext() {
+    try {
+        const response = await chrome.runtime.sendMessage({ action: 'get_email_context' });
+        return response?.emailContext || null;
+    } catch (e) {
+        console.warn('[BroTrans] Could not get email context:', e);
+        return null;
+    }
+}
+
+// Execute action in Gmail
+async function executeAction(action) {
+    if (!action?.action) return null;
+    try {
+        return await chrome.runtime.sendMessage({
+            action: 'execute_action',
+            gmailAction: action.action,
+            params: action.params || {}
+        });
+    } catch (e) {
+        console.warn('[BroTrans] Could not execute action:', e);
+        return { error: e.message };
+    }
+}
+
+// Generate AI response
+async function generateResponse(userMessage) {
+    isGenerating = true;
+    updateStatus('loading', 'Thinking...');
+    disableInputs();
+
+    const msgEl = addMessage('', 'assistant', true);
 
     try {
-        const response = await chrome.runtime.sendMessage({
-            action: 'classify',
-            text: text
+        // Get email context from Gmail
+        const emailContext = await getEmailContext();
+
+        // Build prompt with context
+        let contextStr = '';
+        if (emailContext?.emails?.length > 0) {
+            contextStr += '\n\nCurrent inbox:\n' + emailContext.emails.slice(0, 10).map((e, i) =>
+                `${i + 1}. ${e.unread ? '[UNREAD] ' : ''}From: ${e.sender} | Subject: ${e.subject}`
+            ).join('\n');
+        }
+        if (emailContext?.openEmail) {
+            const e = emailContext.openEmail;
+            contextStr += `\n\nCurrently open email:\nFrom: ${e.sender}\nSubject: ${e.subject}\nContent: ${e.body?.slice(0, 500)}...`;
+        }
+
+        // Format as chat
+        const prompt = `<|im_start|>system
+${SYSTEM_PROMPT}${contextStr}
+<|im_end|>
+<|im_start|>user
+${userMessage}
+<|im_end|>
+<|im_start|>assistant
+`;
+
+        // Generate response
+        const result = await generator(prompt, {
+            max_new_tokens: 256,
+            temperature: 0.7,
+            do_sample: true,
+            top_p: 0.9,
+            repetition_penalty: 1.1,
         });
 
-        if (response && response.length > 0) {
-            displayResult(response[0]);
+        // Extract response text
+        let response = result[0].generated_text;
+        // Remove the prompt from output
+        response = response.split('<|im_start|>assistant\n').pop();
+        response = response.split('<|im_end|>')[0].trim();
+
+        // Check for action JSON
+        let action = null;
+        const actionMatch = response.match(/\{[\s\S]*?"action"[\s\S]*?\}/);
+        if (actionMatch) {
+            try {
+                action = JSON.parse(actionMatch[0]);
+            } catch (e) { }
         }
+
+        // Clean response for display
+        let cleanResponse = response;
+        if (action) {
+            cleanResponse = response.replace(/\{[\s\S]*?"action"[\s\S]*?\}/, '').trim();
+            if (!cleanResponse) {
+                cleanResponse = `Executing: ${action.action}`;
+            }
+        }
+
+        msgEl.innerHTML = formatMessage(cleanResponse);
+
+        // Execute action if found
+        if (action) {
+            const result = await executeAction(action);
+            if (result) {
+                handleActionResult(result);
+            }
+        }
+
     } catch (error) {
-        console.error('Classification error:', error);
+        console.error('[BroTrans] Generate error:', error);
+        msgEl.innerHTML = formatMessage(`Error: ${error.message}`);
     } finally {
-        isAnalyzing = false;
-        analyzeBtn.classList.remove('loading');
-        analyzeBtn.querySelector('span').textContent = 'Analyze Sentiment';
-        analyzeBtn.disabled = !textInput.value.trim();
+        isGenerating = false;
+        updateStatus('ready', 'Ready');
+        enableInputs();
+        chatContainer.scrollTop = chatContainer.scrollHeight;
     }
 }
 
-// Display the result
-function displayResult(result) {
-    const isPositive = result.label === 'POSITIVE';
-    const score = Math.round(result.score * 100);
+// Add message to chat
+function addMessage(content, role, isLoading = false) {
+    const messageDiv = document.createElement('div');
+    messageDiv.className = `message ${role}`;
 
-    // Update container class
-    resultContainer.className = 'result-container ' + (isPositive ? 'positive' : 'negative');
+    const contentDiv = document.createElement('div');
+    contentDiv.className = 'message-content';
 
-    // Update icon
-    resultIcon.innerHTML = isPositive
-        ? '<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg>'
-        : '<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M16 16s-1.5-2-4-2-4 2-4 2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg>';
+    if (isLoading) {
+        contentDiv.innerHTML = '<span class="typing-indicator"><span></span><span></span><span></span></span>';
+    } else {
+        contentDiv.innerHTML = formatMessage(content);
+    }
 
-    // Update label
-    resultLabel.textContent = isPositive ? 'Positive' : 'Negative';
+    messageDiv.appendChild(contentDiv);
+    chatMessages.appendChild(messageDiv);
+    chatContainer.scrollTop = chatContainer.scrollHeight;
 
-    // Update score
-    scoreValue.textContent = score + '%';
+    return contentDiv;
+}
 
-    // Update confidence bar
-    confidenceFill.style.width = score + '%';
+// Format message text with markdown-like styling
+function formatMessage(text) {
+    if (!text) return '';
 
-    // Show result
-    resultContainer.classList.remove('hidden');
+    // Escape HTML
+    text = text
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+
+    // Simple markdown
+    text = text.replace(/```([\s\S]*?)```/g, '<pre>$1</pre>');
+    text = text.replace(/`([^`]+)`/g, '<code>$1</code>');
+    text = text.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+    text = text.replace(/^\s*[-*]\s+(.+)$/gm, '<li>$1</li>');
+    text = text.replace(/\n/g, '<br>');
+
+    return text;
+}
+
+// Handle action results from Gmail
+function handleActionResult(result) {
+    if (!result || result.error) {
+        if (result?.error) {
+            addMessage(`Action failed: ${result.error}`, 'system');
+        }
+        return;
+    }
+
+    if (result.summary) {
+        const s = result.summary;
+        addMessage(`**Inbox:** ${s.total} emails, ${s.unread} unread, ${s.starred} starred`, 'system');
+    }
+
+    if (result.email) {
+        const e = result.email;
+        addMessage(`**Email:** From ${e.from} | ${e.subject}`, 'system');
+    }
+
+    if (result.message) {
+        addMessage(result.message, 'system');
+    }
 }

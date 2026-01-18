@@ -1,27 +1,29 @@
 {
   "manifest_version": 3,
-  "name": "BroTrans",
-  "description": "AI-powered sentiment analysis running locally in your browser. Analyze text emotions instantly with no server required.",
+  "name": "BroTrans - Gmail Assistant",
+  "description": "AI-powered Gmail assistant running locally with Transformers.js. Summarize emails, search, analyze - all private.",
   "version": "1.0.0",
   "permissions": [
     "activeTab",
     "scripting",
     "contextMenus",
-    "storage",
-    "unlimitedStorage"
+    "storage"
+  ],
+  "host_permissions": [
+    "https://mail.google.com/*"
   ],
   "background": {
-    "service_worker": "background.js",
-    "type": "module"
+    "service_worker": "background.js"
   },
   "content_scripts": [
     {
       "matches": [
-        "<all_urls>"
+        "https://mail.google.com/*"
       ],
       "js": [
         "content.js"
-      ]
+      ],
+      "run_at": "document_idle"
     }
   ],
   "minimum_chrome_version": "92",
@@ -32,11 +34,11 @@
       "48": "icons/icon48.png",
       "128": "icons/icon128.png"
     },
-    "default_title": "BroTrans - Sentiment Analyzer",
+    "default_title": "BroTrans - Gmail Assistant",
     "default_popup": "popup.html"
   },
   "content_security_policy": {
-    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'"
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'"
   },
   "icons": {
     "16": "icons/icon16.png",
