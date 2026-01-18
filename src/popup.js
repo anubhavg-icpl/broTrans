@@ -235,9 +235,14 @@ ${userMessage}
 
         // Extract response text
         let response = result[0].generated_text;
-        // Remove the prompt from output
-        response = response.split('<|im_start|>assistant\n').pop();
+
+        // Remove the prompt from output (handle various formats)
+        if (response.includes('<|im_start|>assistant')) {
+            response = response.split('<|im_start|>assistant').pop();
+        }
+        response = response.replace(/^[\n\s]*/, ''); // Remove leading whitespace
         response = response.split('<|im_end|>')[0].trim();
+        response = response.split('<|im_start|>')[0].trim(); // Stop at next turn
 
         // Check for action JSON
         let action = null;
@@ -245,6 +250,10 @@ ${userMessage}
         if (actionMatch) {
             try {
                 action = JSON.parse(actionMatch[0]);
+                // Normalize action name to lowercase
+                if (action.action) {
+                    action.action = action.action.toLowerCase();
+                }
             } catch (e) { }
         }
 
