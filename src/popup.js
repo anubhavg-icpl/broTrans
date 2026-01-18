@@ -171,20 +171,14 @@ async function handleSummarize() {
             throw new Error(pageResponse.error || 'Failed to get page content');
         }
 
-        const { title, url, content, description } = pageResponse.data;
+        const { title, url, content } = pageResponse.data;
 
         // Update page info
         pageTitle.textContent = title || 'Untitled Page';
         pageUrl.textContent = url || '';
 
-        // Use content or fallback to description
-        let textToSummarize = content;
-        if (!content || content.length < 100) {
-            if (description && description.length > 20) {
-                textToSummarize = `Page: ${title}. ${description}`;
-            } else {
-                throw new Error('Page has insufficient content to summarize');
-            }
+        if (!content || content.length < 50) {
+            throw new Error('Page has insufficient content to summarize');
         }
 
         summarizeBtn.querySelector('span').textContent = 'Summarizing...';
@@ -192,7 +186,7 @@ async function handleSummarize() {
         // Step 2: Summarize the content
         const summaryResponse = await chrome.runtime.sendMessage({
             action: 'summarize',
-            text: textToSummarize
+            text: content
         });
 
         if (!summaryResponse.success) {

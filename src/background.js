@@ -105,56 +105,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                 const results = await chrome.scripting.executeScript({
                     target: { tabId: tab.id },
                     function: () => {
-                        // Try to find main content areas first
-                        const mainSelectors = [
-                            'article',
-                            'main',
-                            '[role="main"]',
-                            '.post-content',
-                            '.article-content',
-                            '.entry-content',
-                            '.content',
-                            '#content',
-                            '.readme',
-                            '.markdown-body'
-                        ];
+                        // Simple extraction - just remove scripts/styles and get all text
+                        const clone = document.body.cloneNode(true);
+                        clone.querySelectorAll('script, style, noscript').forEach(el => el.remove());
 
-                        let mainContent = null;
-                        for (const selector of mainSelectors) {
-                            const el = document.querySelector(selector);
-                            if (el && el.innerText && el.innerText.length > 200) {
-                                mainContent = el;
-                                break;
-                            }
-                        }
-
-                        // Fall back to body if no main content found
-                        const source = mainContent || document.body;
-                        const clone = source.cloneNode(true);
-
-                        // Remove unwanted elements
-                        clone.querySelectorAll('script, style, nav, header, footer, aside, iframe, noscript, button, input, form, [role="navigation"], [role="banner"], [role="complementary"]').forEach(el => el.remove());
-
-                        // Get text content
-                        let text = clone.innerText || clone.textContent || '';
-
-                        // Clean up whitespace and remove very short lines (likely UI elements)
-                        text = text
-                            .split('\n')
-                            .map(line => line.trim())
-                            .filter(line => line.length > 20) // Filter short lines
-                            .join(' ')
-                            .replace(/\s+/g, ' ')
-                            .trim();
-
-                        // Get meta description as fallback context
-                        const metaDesc = document.querySelector('meta[name="description"]')?.content || '';
+                        let text = clone.innerText || '';
+                        text = text.replace(/\s+/g, ' ').trim();
 
                         return {
                             title: document.title,
                             url: window.location.href,
-                            content: text,
-                            description: metaDesc
+                            content: text
                         };
                     }
                 });
