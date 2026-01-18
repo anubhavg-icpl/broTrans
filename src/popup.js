@@ -20,15 +20,25 @@ let isGenerating = false;
 let api = null;
 let lastAvailability = null;
 
-// System prompt
-const SYSTEM_PROMPT = `You are BroTrans, a helpful Gmail assistant. Be concise.
+// System prompt for practical Gmail assistance
+const SYSTEM_PROMPT = `You are BroTrans, a smart Gmail assistant. Be concise and actionable.
 
-When users want to perform an action, respond with JSON:
+When summarizing emails, provide:
+- Key points (what's important)
+- Action items (what needs response/action)
+- Priority level (urgent/normal/low)
+
+For inbox summaries:
+- Group by category (work, personal, notifications, promotions)
+- Highlight urgent items first
+- Mention unread count
+
+When users want Gmail actions, respond with JSON:
 {"action": "ACTION_NAME", "params": {}}
 
-Actions: summarize_inbox, summarize_email, filter_unread, search (params: query), analyze_sentiment, draft_reply (params: text), open_email (params: index), scroll (params: direction)
+Actions: summarize_inbox, summarize_email, filter_unread, search (params: query), draft_reply (params: text), open_email (params: index)
 
-Otherwise respond conversationally.`;
+Keep responses short and practical. Use bullet points.`;
 
 // Diagnostic checks
 async function runDiagnostics() {
@@ -450,25 +460,33 @@ async function handleSend() {
     await generateResponse(text);
 }
 
-// Handle quick action (with debounce to prevent double-click)
-let lastQuickAction = 0;
+// Handle quick action (with strict debounce)
+let isProcessing = false;
 async function handleQuickAction(action) {
-    // Prevent double-click (500ms debounce)
-    const now = Date.now();
-    if (now - lastQuickAction < 500) return;
-    lastQuickAction = now;
+    // Strict guard - only one action at a time
+    if (isProcessing || !aiReady || isGenerating) {
+        console.log('[BroTrans] Blocked duplicate action');
+        return;
+    }
+    isProcessing = true;
 
-    if (!aiReady || isGenerating) return;
+    // Disable all buttons immediately
+    quickActions.forEach(btn => btn.disabled = true);
 
     const messages = {
-        summarize_inbox: 'Summarize my inbox',
-        filter_unread: 'Show my unread emails',
-        summarize_email: 'Summarize the current email',
+        summarize_inbox: 'Give me a quick overview of my inbox - categorize by type and highlight anything urgent',
+        filter_unread: 'What urgent or important emails need my attention right now?',
+        summarize_email: 'Summarize this email - key points, action items, and suggested reply if needed',
     };
 
     const message = messages[action] || action;
     addMessage(message, 'user');
-    await generateResponse(message);
+
+    try {
+        await generateResponse(message);
+    } finally {
+        isProcessing = false;
+    }
 }
 
 // Get email context from Gmail
