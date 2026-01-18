@@ -18,6 +18,7 @@ let aiSession = null;
 let aiReady = false;
 let isGenerating = false;
 let api = null;
+let lastAvailability = null;
 
 // System prompt
 const SYSTEM_PROMPT = `You are BroTrans, a helpful Gmail assistant. Be concise.
@@ -29,16 +30,118 @@ Actions: summarize_inbox, summarize_email, filter_unread, search (params: query)
 
 Otherwise respond conversationally.`;
 
+// Diagnostic checks
+async function runDiagnostics() {
+    const results = {
+        chromeVersion: null,
+        hasLanguageModel: false,
+        hasAiNamespace: false,
+        availability: null,
+        canCreate: false,
+        error: null
+    };
+
+    // Check Chrome version
+    const match = navigator.userAgent.match(/Chrome\/(\d+)/);
+    results.chromeVersion = match ? parseInt(match[1]) : 'Unknown';
+
+    // Check API availability
+    results.hasLanguageModel = typeof LanguageModel !== 'undefined';
+    results.hasAiNamespace = typeof ai !== 'undefined' && ai?.languageModel;
+
+    // Check model availability
+    if (results.hasLanguageModel || results.hasAiNamespace) {
+        try {
+            const api = results.hasLanguageModel ? LanguageModel : ai.languageModel;
+            results.availability = await api.availability();
+        } catch (e) {
+            results.error = e.message;
+        }
+    }
+
+    return results;
+}
+
+// Show diagnostic results
+function showDiagnostics(results) {
+    const checks = [
+        {
+            name: 'Chrome Version',
+            status: results.chromeVersion >= 128 ? 'pass' : 'fail',
+            value: `${results.chromeVersion} ${results.chromeVersion >= 128 ? '(OK)' : '(Need 128+)'}`
+        },
+        {
+            name: 'LanguageModel API',
+            status: results.hasLanguageModel ? 'pass' : 'fail',
+            value: results.hasLanguageModel ? 'Available' : 'Not found'
+        },
+        {
+            name: 'ai.languageModel API',
+            status: results.hasAiNamespace ? 'pass' : 'warn',
+            value: results.hasAiNamespace ? 'Available' : 'Not found'
+        },
+        {
+            name: 'Model Status',
+            status: results.availability === 'available' || results.availability === 'readily' ? 'pass' :
+                    results.availability === 'downloadable' || results.availability === 'downloading' ? 'warn' : 'fail',
+            value: results.availability || 'Unknown'
+        }
+    ];
+
+    let html = '<div class="diagnostics"><div class="diag-title">System Check</div>';
+
+    checks.forEach(check => {
+        const icon = check.status === 'pass' ? '✓' : check.status === 'warn' ? '⚠' : '✗';
+        const colorClass = check.status === 'pass' ? 'diag-pass' : check.status === 'warn' ? 'diag-warn' : 'diag-fail';
+        html += `<div class="diag-row"><span class="diag-icon ${colorClass}">${icon}</span><span class="diag-name">${check.name}</span><span class="diag-value">${check.value}</span></div>`;
+    });
+
+    if (results.error) {
+        html += `<div class="diag-error">Error: ${results.error}</div>`;
+    }
+
+    // Add setup instructions based on results
+    if (!results.hasLanguageModel && !results.hasAiNamespace) {
+        html += `<div class="diag-instructions">
+            <strong>Enable these Chrome flags:</strong><br>
+            1. <code>chrome://flags/#optimization-guide-on-device-model</code><br>
+            → Set to "Enabled BypassPerfRequirement"<br><br>
+            2. <code>chrome://flags/#prompt-api-for-gemini-nano</code><br>
+            → Set to "Enabled"<br><br>
+            3. Restart Chrome
+        </div>`;
+    } else if (results.availability === 'downloadable' || results.availability === 'after-download') {
+        html += `<div class="diag-instructions">
+            <strong>Model needs to download:</strong><br>
+            Go to <code>chrome://on-device-internals</code><br>
+            Wait for "Foundational model state: Ready"
+        </div>`;
+    } else if (results.availability === 'unavailable') {
+        html += `<div class="diag-instructions">
+            <strong>Device not supported:</strong><br>
+            • Need 22GB+ free disk space<br>
+            • macOS 13+ / Windows 10+ / Linux<br>
+            • 4GB+ VRAM or 16GB+ RAM
+        </div>`;
+    }
+
+    html += '<button class="error-action" onclick="location.reload()">Retry</button>';
+    html += '</div>';
+
+    statusDetail.innerHTML = html;
+}
+
 // Error messages with helpful instructions
 const ERROR_MESSAGES = {
     NO_API: {
-        title: 'AI API Not Found',
+        title: 'Setup Required',
         detail: `Enable Chrome flags:
 1. chrome://flags/#optimization-guide-on-device-model → Enabled BypassPerfRequirement
 2. chrome://flags/#prompt-api-for-gemini-nano → Enabled
 3. Restart Chrome`,
-        action: 'Open Chrome Flags',
-        actionUrl: 'chrome://flags/#prompt-api-for-gemini-nano'
+        action: 'Run Diagnostics',
+        actionUrl: null,
+        runDiagnostics: true
     },
     UNAVAILABLE: {
         title: 'Not Supported',
@@ -108,10 +211,17 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 // Show error with action button
-function showError(errorType, customMessage = null) {
+async function showError(errorType, customMessage = null) {
     const error = ERROR_MESSAGES[errorType] || ERROR_MESSAGES.GENERIC;
 
     updateStatus('error', error.title);
+
+    // Run diagnostics for setup errors
+    if (error.runDiagnostics || errorType === 'NO_API' || errorType === 'UNAVAILABLE') {
+        const results = await runDiagnostics();
+        showDiagnostics(results);
+        return;
+    }
 
     // Create detailed error message with action button
     let html = `<div class="error-detail">${customMessage || error.detail.replace(/\n/g, '<br>')}</div>`;
@@ -152,16 +262,21 @@ async function initAI() {
     updateStatus('loading', 'Checking AI...');
     statusDetail.textContent = '';
 
-    // Step 1: Check if API exists
-    if (typeof LanguageModel === 'undefined' && typeof ai === 'undefined') {
-        console.log('[BroTrans] No AI API found');
-        showError('NO_API');
-        return;
-    }
+    // Try multiple API access patterns
+    api = null;
 
-    // Get API reference
-    api = typeof LanguageModel !== 'undefined' ? LanguageModel :
-          (typeof ai !== 'undefined' && ai.languageModel ? ai.languageModel : null);
+    // Try LanguageModel global (newer API)
+    if (typeof LanguageModel !== 'undefined') {
+        api = LanguageModel;
+    }
+    // Try window.ai.languageModel
+    else if (typeof window.ai !== 'undefined' && window.ai?.languageModel) {
+        api = window.ai.languageModel;
+    }
+    // Try self.ai.languageModel (extension context)
+    else if (typeof self.ai !== 'undefined' && self.ai?.languageModel) {
+        api = self.ai.languageModel;
+    }
 
     if (!api) {
         showError('NO_API');
@@ -171,70 +286,95 @@ async function initAI() {
     try {
         updateStatus('loading', 'Checking model...');
 
-        // Step 2: Check availability
+        // Check availability
         let availability;
         try {
             availability = await api.availability();
+            lastAvailability = availability;
         } catch (e) {
-            // availability() might fail if API is not fully ready
-            console.error('[BroTrans] availability() failed:', e);
-            showError('NO_API', `API check failed: ${e.message}`);
+            statusDetail.innerHTML = `<div class="error-detail">
+                <strong>API check failed:</strong><br>
+                ${e.message}<br>
+                <button class="error-action" onclick="location.reload()">Retry</button>
+            </div>`;
+            updateStatus('error', 'API Check Failed');
             return;
         }
 
-        console.log('[BroTrans] AI availability:', availability);
+        // Handle different availability states
 
-        // Step 3: Handle different availability states
-        switch (availability) {
-            case 'unavailable':
-            case 'no':
-                showError('UNAVAILABLE');
-                return;
+        // Normalize availability to string
+        const availStr = String(availability).toLowerCase();
 
-            case 'downloadable':
-            case 'after-download':
-                showError('DOWNLOADING');
-                // Try to trigger download by creating session
-                updateStatus('loading', 'Downloading model...');
-                break;
+        if (availStr === 'unavailable' || availStr === 'no') {
+            showError('UNAVAILABLE');
+            return;
+        }
 
-            case 'downloading':
-                showError('INSTALL_INCOMPLETE');
-                return;
+        // If model needs download, show button (requires user gesture)
+        if (availStr === 'downloadable' || availStr === 'after-download' || availStr === 'downloading') {
+            updateStatus('loading', 'Model Ready to Download');
+            statusDetail.innerHTML = `<div class="error-detail">
+                <strong>Gemini Nano needs to download (~2GB)</strong><br><br>
+                Click the button below to start. This is a one-time download.<br><br>
+                <button class="error-action" id="download-model-btn">Download & Start AI</button>
+            </div>`;
 
-            case 'available':
-            case 'readily':
-            case 'yes':
-                // Model is ready, continue to create session
-                break;
-
-            default:
-                console.warn('[BroTrans] Unknown availability:', availability);
-                // Try to continue anyway
-                break;
+            // Add click handler for download button
+            document.getElementById('download-model-btn').addEventListener('click', async () => {
+                await createSession();
+            });
+            return;
         }
 
         // Step 4: Create AI session
+        await createSession();
+    } catch (error) {
+        console.error('[BroTrans] AI init error:', error);
+        showError('GENERIC', `Initialization failed: ${error.message}`);
+    }
+}
+
+// Create AI session (must be called from user gesture if downloading)
+async function createSession() {
+    try {
         updateStatus('loading', 'Starting AI...');
+        statusDetail.innerHTML = '<div class="error-detail">Connecting to Gemini Nano...<br>This may take a moment if model is downloading.</div>';
 
         try {
-            aiSession = await api.create({
-                systemPrompt: SYSTEM_PROMPT
+            // Add timeout for session creation (60s)
+            const timeoutMs = 60000;
+            const sessionPromise = api.create({
+                systemPrompt: SYSTEM_PROMPT,
+                expectedInputs: [{ type: 'text', languages: ['en'] }],
+                expectedOutputs: [{ type: 'text', languages: ['en'] }],
+                monitor(m) {
+                    m.addEventListener('downloadprogress', (e) => {
+                        const percent = Math.round(e.loaded * 100);
+                        console.log(`[BroTrans] Download progress: ${percent}%`);
+                        statusDetail.innerHTML = `<div class="error-detail">
+                            <strong>Downloading Gemini Nano...</strong><br>
+                            Progress: ${percent}%<br>
+                            <div style="background:#49454F;border-radius:4px;height:8px;margin-top:8px;">
+                                <div style="background:#D0BCFF;height:100%;border-radius:4px;width:${percent}%;transition:width 0.3s;"></div>
+                            </div>
+                        </div>`;
+                    });
+                }
             });
+
+            const timeoutPromise = new Promise((_, reject) => {
+                setTimeout(() => reject(new Error('Session creation timed out after 60s. The model may still be downloading - check chrome://on-device-internals')), timeoutMs);
+            });
+
+            aiSession = await Promise.race([sessionPromise, timeoutPromise]);
         } catch (createError) {
-            console.error('[BroTrans] Session create error:', createError);
-
-            const errorMsg = createError.message.toLowerCase();
-
-            if (errorMsg.includes('disk') || errorMsg.includes('space')) {
-                showError('DISK_SPACE');
-            } else if (errorMsg.includes('download') || errorMsg.includes('install')) {
-                showError('INSTALL_INCOMPLETE');
-            } else if (errorMsg.includes('unavailable') || errorMsg.includes('not supported')) {
-                showError('UNAVAILABLE');
-            } else {
-                showError('GENERIC', `Failed to start AI: ${createError.message}`);
-            }
+            statusDetail.innerHTML = `<div class="error-detail">
+                <strong>Session failed:</strong><br>
+                ${createError.message}<br>
+                <button class="error-action" onclick="location.reload()">Retry</button>
+            </div>`;
+            updateStatus('error', 'Session Failed');
             return;
         }
 
@@ -243,7 +383,6 @@ async function initAI() {
         updateStatus('ready', 'Ready');
         statusDetail.textContent = '';
         enableInputs();
-        console.log('[BroTrans] AI ready!');
 
         // Show success message in chat
         addSystemMessage('Gemini Nano is ready! Open Gmail and ask me anything about your emails.');
