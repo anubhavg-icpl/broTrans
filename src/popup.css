@@ -605,6 +605,12 @@ body {
     cursor: not-allowed;
 }
 
+/* Prevent SVG from capturing clicks */
+.quick-action svg,
+.send-btn svg {
+    pointer-events: none;
+}
+
 /* Footer */
 .footer {
     display: flex;

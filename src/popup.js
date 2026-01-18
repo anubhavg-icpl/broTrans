@@ -207,16 +207,28 @@ Under "Feature Adaptations", click "set to true" next to PromptApi`,
     }
 };
 
-// Initialize
+// Initialize (only once)
+let initialized = false;
 document.addEventListener('DOMContentLoaded', () => {
+    if (initialized) return;
+    initialized = true;
+
     initAI();
 
     userInput.addEventListener('input', handleInput);
     userInput.addEventListener('keydown', handleKeydown);
-    sendBtn.addEventListener('click', handleSend);
+    sendBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        handleSend();
+    });
 
     quickActions.forEach(btn => {
-        btn.addEventListener('click', () => handleQuickAction(btn.dataset.action));
+        btn.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            handleQuickAction(btn.dataset.action);
+        }, { once: false, capture: true });
     });
 });
 
@@ -460,17 +472,26 @@ async function handleSend() {
     await generateResponse(text);
 }
 
-// Handle quick action (with strict debounce)
-let isProcessing = false;
+// Track last click to prevent duplicates
+let lastClickTime = 0;
+let lastClickAction = '';
+
 async function handleQuickAction(action) {
-    // Strict guard - only one action at a time
-    if (isProcessing || !aiReady || isGenerating) {
-        console.log('[BroTrans] Blocked duplicate action');
+    // Strict time-based duplicate prevention
+    const now = Date.now();
+    if (now - lastClickTime < 2000 && lastClickAction === action) {
+        return; // Ignore duplicate within 2 seconds
+    }
+    lastClickTime = now;
+    lastClickAction = action;
+
+    // Guard against concurrent requests
+    if (!aiReady || isGenerating) {
         return;
     }
-    isProcessing = true;
 
-    // Disable all buttons immediately
+    // Disable ALL buttons immediately
+    sendBtn.disabled = true;
     quickActions.forEach(btn => btn.disabled = true);
 
     const messages = {
@@ -481,12 +502,7 @@ async function handleQuickAction(action) {
 
     const message = messages[action] || action;
     addMessage(message, 'user');
-
-    try {
-        await generateResponse(message);
-    } finally {
-        isProcessing = false;
-    }
+    await generateResponse(message);
 }
 
 // Get email context from Gmail
@@ -554,11 +570,11 @@ async function generateResponse(userMessage) {
             }
         }
 
-        // Generate response with timeout
+        // Generate response with timeout (90 seconds for complex prompts)
         let response;
         try {
             const timeoutPromise = new Promise((_, reject) =>
-                setTimeout(() => reject(new Error('Response timeout')), 30000)
+                setTimeout(() => reject(new Error('Response timeout - try a shorter question')), 90000)
             );
             response = await Promise.race([
                 aiSession.prompt(prompt),
