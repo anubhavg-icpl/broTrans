@@ -15,6 +15,7 @@ const config = {
             import: './src/background.js',
             chunkLoading: `import-scripts`,
         },
+        offscreen: './src/offscreen.js',
         popup: './src/popup.js',
         content: './src/content.js',
     },
