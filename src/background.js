@@ -14,10 +14,10 @@ class SentimentPipeline {
     }
 }
 
-// Summarization Pipeline (small model)
+// Text Generation Pipeline (instruction-tuned model for better summarization)
 class SummaryPipeline {
-    static task = 'summarization';
-    static model = 'Xenova/distilbart-cnn-6-6';
+    static task = 'text2text-generation';
+    static model = 'Xenova/flan-t5-small';
     static instance = null;
 
     static async getInstance() {
@@ -35,11 +35,12 @@ const classify = async (text) => {
 // Summarize text
 const summarize = async (text) => {
     const model = await SummaryPipeline.getInstance();
-    // Limit input to ~1000 words for performance
-    const truncated = text.split(/\s+/).slice(0, 1000).join(' ');
-    const result = await model(truncated, {
-        max_new_tokens: 150,
-        min_length: 30,
+    // Limit input to ~500 words for performance with Flan-T5
+    const truncated = text.split(/\s+/).slice(0, 500).join(' ');
+    // Use instruction format for Flan-T5
+    const prompt = `Summarize the following webpage content in 2-3 sentences:\n\n${truncated}`;
+    const result = await model(prompt, {
+        max_new_tokens: 100,
     });
     return result;
 };
@@ -85,8 +86,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         (async () => {
             try {
                 const result = await summarize(message.text);
-                sendResponse({ success: true, summary: result[0].summary_text });
+                // Flan-T5 returns generated_text instead of summary_text
+                const summaryText = result[0]?.generated_text || result[0]?.summary_text || 'No summary generated';
+                sendResponse({ success: true, summary: summaryText });
             } catch (error) {
+                console.error('Summarize error:', error);
                 sendResponse({ success: false, error: error.message });
             }
         })();
@@ -101,22 +105,56 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                 const results = await chrome.scripting.executeScript({
                     target: { tabId: tab.id },
                     function: () => {
-                        // Extract main text content from the page
-                        const elementsToRemove = document.querySelectorAll('script, style, nav, header, footer, aside, iframe, noscript');
-                        const clone = document.body.cloneNode(true);
-                        clone.querySelectorAll('script, style, nav, header, footer, aside, iframe, noscript').forEach(el => el.remove());
+                        // Try to find main content areas first
+                        const mainSelectors = [
+                            'article',
+                            'main',
+                            '[role="main"]',
+                            '.post-content',
+                            '.article-content',
+                            '.entry-content',
+                            '.content',
+                            '#content',
+                            '.readme',
+                            '.markdown-body'
+                        ];
+
+                        let mainContent = null;
+                        for (const selector of mainSelectors) {
+                            const el = document.querySelector(selector);
+                            if (el && el.innerText && el.innerText.length > 200) {
+                                mainContent = el;
+                                break;
+                            }
+                        }
+
+                        // Fall back to body if no main content found
+                        const source = mainContent || document.body;
+                        const clone = source.cloneNode(true);
+
+                        // Remove unwanted elements
+                        clone.querySelectorAll('script, style, nav, header, footer, aside, iframe, noscript, button, input, form, [role="navigation"], [role="banner"], [role="complementary"]').forEach(el => el.remove());
 
                         // Get text content
                         let text = clone.innerText || clone.textContent || '';
 
-                        // Clean up whitespace
-                        text = text.replace(/\s+/g, ' ').trim();
+                        // Clean up whitespace and remove very short lines (likely UI elements)
+                        text = text
+                            .split('\n')
+                            .map(line => line.trim())
+                            .filter(line => line.length > 20) // Filter short lines
+                            .join(' ')
+                            .replace(/\s+/g, ' ')
+                            .trim();
 
-                        // Get page title and URL
+                        // Get meta description as fallback context
+                        const metaDesc = document.querySelector('meta[name="description"]')?.content || '';
+
                         return {
                             title: document.title,
                             url: window.location.href,
-                            content: text
+                            content: text,
+                            description: metaDesc
                         };
                     }
                 });
