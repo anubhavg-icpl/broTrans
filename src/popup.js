@@ -1,5 +1,6 @@
 // popup.js - BroTrans Gmail Assistant with Chrome Built-in AI (Gemini Nano)
 // AI runs directly in popup (not service worker - API limitation)
+// Comprehensive error handling for all Gemini Nano states
 
 // DOM Elements
 const statusBadge = document.getElementById('status-badge');
@@ -16,6 +17,7 @@ const quickActions = document.querySelectorAll('.quick-action');
 let aiSession = null;
 let aiReady = false;
 let isGenerating = false;
+let api = null;
 
 // System prompt
 const SYSTEM_PROMPT = `You are BroTrans, a helpful Gmail assistant. Be concise.
@@ -26,6 +28,71 @@ When users want to perform an action, respond with JSON:
 Actions: summarize_inbox, summarize_email, filter_unread, search (params: query), analyze_sentiment, draft_reply (params: text), open_email (params: index), scroll (params: direction)
 
 Otherwise respond conversationally.`;
+
+// Error messages with helpful instructions
+const ERROR_MESSAGES = {
+    NO_API: {
+        title: 'AI API Not Found',
+        detail: `Enable Chrome flags:
+1. chrome://flags/#optimization-guide-on-device-model → Enabled BypassPerfRequirement
+2. chrome://flags/#prompt-api-for-gemini-nano → Enabled
+3. Restart Chrome`,
+        action: 'Open Chrome Flags',
+        actionUrl: 'chrome://flags/#prompt-api-for-gemini-nano'
+    },
+    UNAVAILABLE: {
+        title: 'Not Supported',
+        detail: `Your device doesn't meet requirements:
+• macOS 13+ / Windows 10+ / Linux / ChromeOS
+• 22GB free disk space
+• 4GB+ VRAM or 16GB RAM`,
+        action: 'Check Requirements',
+        actionUrl: 'chrome://on-device-internals'
+    },
+    DISK_SPACE: {
+        title: 'Insufficient Disk Space',
+        detail: `Gemini Nano needs ~22GB free space.
+Current: Check chrome://on-device-internals
+Free up disk space and restart Chrome.`,
+        action: 'Check Status',
+        actionUrl: 'chrome://on-device-internals'
+    },
+    DOWNLOADING: {
+        title: 'Model Downloading',
+        detail: `Gemini Nano is being downloaded (~2GB).
+This may take a few minutes.
+Check progress at chrome://on-device-internals`,
+        action: 'Check Progress',
+        actionUrl: 'chrome://on-device-internals'
+    },
+    INSTALL_INCOMPLETE: {
+        title: 'Installation In Progress',
+        detail: `Model is still installing.
+Wait for completion at chrome://on-device-internals
+"Foundational model state" should show "Ready"`,
+        action: 'Check Status',
+        actionUrl: 'chrome://on-device-internals'
+    },
+    SESSION_ERROR: {
+        title: 'Session Error',
+        detail: 'AI session was lost. Click to reinitialize.',
+        action: 'Retry',
+        actionUrl: null
+    },
+    PROMPT_API_DISABLED: {
+        title: 'Prompt API Disabled',
+        detail: `Enable PromptApi in chrome://on-device-internals
+Under "Feature Adaptations", click "set to true" next to PromptApi`,
+        action: 'Enable PromptApi',
+        actionUrl: 'chrome://on-device-internals'
+    },
+    GENERIC: {
+        title: 'Error',
+        detail: 'Something went wrong. Check chrome://on-device-internals for details.',
+        action: 'Check Status',
+        actionUrl: 'chrome://on-device-internals'
+    }
+};
 
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
@@ -40,63 +107,154 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 });
 
+// Show error with action button
+function showError(errorType, customMessage = null) {
+    const error = ERROR_MESSAGES[errorType] || ERROR_MESSAGES.GENERIC;
+
+    updateStatus('error', error.title);
+
+    // Create detailed error message with action button
+    let html = `<div class="error-detail">${customMessage || error.detail.replace(/\n/g, '<br>')}</div>`;
+
+    if (error.action) {
+        if (error.actionUrl) {
+            html += `<button class="error-action" onclick="copyToClipboard('${error.actionUrl}')">${error.action}</button>`;
+            html += `<div class="error-hint">Click to copy URL, then paste in address bar</div>`;
+        } else if (errorType === 'SESSION_ERROR') {
+            html += `<button class="error-action" onclick="location.reload()">Retry</button>`;
+        }
+    }
+
+    statusDetail.innerHTML = html;
+}
+
+// Copy URL to clipboard (chrome:// URLs can't be opened programmatically)
+window.copyToClipboard = async function(url) {
+    try {
+        await navigator.clipboard.writeText(url);
+        const btn = statusDetail.querySelector('.error-action');
+        if (btn) {
+            const originalText = btn.textContent;
+            btn.textContent = 'Copied!';
+            btn.classList.add('copied');
+            setTimeout(() => {
+                btn.textContent = originalText;
+                btn.classList.remove('copied');
+            }, 2000);
+        }
+    } catch (e) {
+        console.error('Failed to copy:', e);
+    }
+};
+
 // Check AI availability and initialize
 async function initAI() {
     updateStatus('loading', 'Checking AI...');
+    statusDetail.textContent = '';
 
-    // Check if API exists (new global namespace)
+    // Step 1: Check if API exists
     if (typeof LanguageModel === 'undefined' && typeof ai === 'undefined') {
-        updateStatus('error', 'AI not available');
-        statusDetail.innerHTML = `Enable at:<br>chrome://flags/#prompt-api-for-gemini-nano<br>Then restart Chrome`;
+        console.log('[BroTrans] No AI API found');
+        showError('NO_API');
+        return;
+    }
+
+    // Get API reference
+    api = typeof LanguageModel !== 'undefined' ? LanguageModel :
+          (typeof ai !== 'undefined' && ai.languageModel ? ai.languageModel : null);
+
+    if (!api) {
+        showError('NO_API');
         return;
     }
 
     try {
-        // Try new API first (LanguageModel global), then fallback to ai.languageModel
-        const api = typeof LanguageModel !== 'undefined' ? LanguageModel :
-                    (typeof ai !== 'undefined' && ai.languageModel ? ai.languageModel : null);
-
-        if (!api) {
-            throw new Error('No AI API found');
-        }
-
         updateStatus('loading', 'Checking model...');
 
-        // Check availability
-        const availability = await api.availability();
-        console.log('[BroTrans] AI availability:', availability);
-
-        if (availability === 'unavailable' || availability === 'no') {
-            updateStatus('error', 'Model unavailable');
-            statusDetail.textContent = 'Gemini Nano not supported on this device';
+        // Step 2: Check availability
+        let availability;
+        try {
+            availability = await api.availability();
+        } catch (e) {
+            // availability() might fail if API is not fully ready
+            console.error('[BroTrans] availability() failed:', e);
+            showError('NO_API', `API check failed: ${e.message}`);
             return;
         }
 
-        if (availability === 'downloadable' || availability === 'after-download') {
-            updateStatus('loading', 'Model downloading...');
-            statusDetail.textContent = 'Go to chrome://components and update "Optimization Guide On Device Model"';
+        console.log('[BroTrans] AI availability:', availability);
+
+        // Step 3: Handle different availability states
+        switch (availability) {
+            case 'unavailable':
+            case 'no':
+                showError('UNAVAILABLE');
+                return;
+
+            case 'downloadable':
+            case 'after-download':
+                showError('DOWNLOADING');
+                // Try to trigger download by creating session
+                updateStatus('loading', 'Downloading model...');
+                break;
+
+            case 'downloading':
+                showError('INSTALL_INCOMPLETE');
+                return;
+
+            case 'available':
+            case 'readily':
+            case 'yes':
+                // Model is ready, continue to create session
+                break;
+
+            default:
+                console.warn('[BroTrans] Unknown availability:', availability);
+                // Try to continue anyway
+                break;
         }
 
-        // Create session
-        updateStatus('loading', 'Loading model...');
-        aiSession = await api.create({
-            systemPrompt: SYSTEM_PROMPT
-        });
+        // Step 4: Create AI session
+        updateStatus('loading', 'Starting AI...');
 
+        try {
+            aiSession = await api.create({
+                systemPrompt: SYSTEM_PROMPT
+            });
+        } catch (createError) {
+            console.error('[BroTrans] Session create error:', createError);
+
+            const errorMsg = createError.message.toLowerCase();
+
+            if (errorMsg.includes('disk') || errorMsg.includes('space')) {
+                showError('DISK_SPACE');
+            } else if (errorMsg.includes('download') || errorMsg.includes('install')) {
+                showError('INSTALL_INCOMPLETE');
+            } else if (errorMsg.includes('unavailable') || errorMsg.includes('not supported')) {
+                showError('UNAVAILABLE');
+            } else {
+                showError('GENERIC', `Failed to start AI: ${createError.message}`);
+            }
+            return;
+        }
+
+        // Success!
         aiReady = true;
         updateStatus('ready', 'Ready');
         statusDetail.textContent = '';
         enableInputs();
-        console.log('[BroTrans] AI ready');
+        console.log('[BroTrans] AI ready!');
+
+        // Show success message in chat
+        addSystemMessage('Gemini Nano is ready! Open Gmail and ask me anything about your emails.');
 
     } catch (error) {
         console.error('[BroTrans] AI init error:', error);
-        updateStatus('error', 'Init failed');
-        statusDetail.textContent = error.message;
+        showError('GENERIC', `Initialization failed: ${error.message}`);
     }
 }
 
-// Update status
+// Update status badge
 function updateStatus(status, text) {
     statusBadge.className = 'status-badge ' + status;
     statusText.textContent = text;
@@ -108,6 +266,12 @@ function enableInputs() {
     userInput.placeholder = 'Ask about your emails...';
     sendBtn.disabled = false;
     quickActions.forEach(btn => btn.disabled = false);
+}
+
+// Disable inputs
+function disableInputs() {
+    sendBtn.disabled = true;
+    quickActions.forEach(btn => btn.disabled = true);
 }
 
 // Handle input
@@ -163,10 +327,14 @@ async function handleQuickAction(action) {
 async function getEmailContext() {
     try {
         const response = await chrome.runtime.sendMessage({ action: 'get_email_context' });
+        if (response?.error) {
+            console.warn('[BroTrans] Gmail error:', response.error);
+            return { error: response.error };
+        }
         return response?.emailContext || null;
     } catch (e) {
         console.warn('[BroTrans] Could not get email context:', e);
-        return null;
+        return { error: 'Open Gmail first' };
     }
 }
 
@@ -199,18 +367,34 @@ async function generateResponse(userMessage) {
 
         // Build prompt with context
         let prompt = userMessage;
-        if (emailContext?.emails?.length > 0) {
-            prompt += '\n\nInbox:\n' + emailContext.emails.slice(0, 10).map((e, i) =>
-                `${i + 1}. ${e.unread ? '[UNREAD] ' : ''}From: ${e.sender} | ${e.subject}`
-            ).join('\n');
-        }
-        if (emailContext?.openEmail) {
-            const e = emailContext.openEmail;
-            prompt += `\n\nOpen email:\nFrom: ${e.sender}\nSubject: ${e.subject}\n${e.body?.slice(0, 300)}...`;
+
+        if (emailContext?.error) {
+            prompt += `\n\n[Note: ${emailContext.error}]`;
+        } else {
+            if (emailContext?.emails?.length > 0) {
+                prompt += '\n\nInbox:\n' + emailContext.emails.slice(0, 10).map((e, i) =>
+                    `${i + 1}. ${e.unread ? '[UNREAD] ' : ''}From: ${e.sender} | ${e.subject}`
+                ).join('\n');
+            }
+            if (emailContext?.openEmail) {
+                const e = emailContext.openEmail;
+                prompt += `\n\nOpen email:\nFrom: ${e.sender}\nSubject: ${e.subject}\n${e.body?.slice(0, 300)}...`;
+            }
         }
 
-        // Generate response
-        const response = await aiSession.prompt(prompt);
+        // Generate response with timeout
+        let response;
+        try {
+            const timeoutPromise = new Promise((_, reject) =>
+                setTimeout(() => reject(new Error('Response timeout')), 30000)
+            );
+            response = await Promise.race([
+                aiSession.prompt(prompt),
+                timeoutPromise
+            ]);
+        } catch (promptError) {
+            throw new Error(`AI response failed: ${promptError.message}`);
+        }
 
         // Parse action
         let action = null;
@@ -218,6 +402,10 @@ async function generateResponse(userMessage) {
         if (actionMatch) {
             try {
                 action = JSON.parse(actionMatch[0]);
+                // Normalize to lowercase
+                if (action.action) {
+                    action.action = action.action.toLowerCase();
+                }
             } catch (e) { }
         }
 
@@ -242,25 +430,40 @@ async function generateResponse(userMessage) {
 
     } catch (error) {
         console.error('[BroTrans] Generate error:', error);
-        msgEl.innerHTML = formatMessage(`Error: ${error.message}`);
 
-        // Reset session on error
-        if (error.message.includes('session') || error.message.includes('destroyed')) {
+        const errorMsg = error.message.toLowerCase();
+
+        // Handle session errors
+        if (errorMsg.includes('session') || errorMsg.includes('destroyed') || errorMsg.includes('invalid')) {
+            msgEl.innerHTML = formatMessage('Session expired. Reinitializing...');
             aiSession = null;
             aiReady = false;
-            updateStatus('error', 'Session expired');
-            statusDetail.textContent = 'Refresh to restart';
+
+            // Try to reinitialize
+            setTimeout(() => initAI(), 1000);
             return;
         }
+
+        // Handle quota/rate limit
+        if (errorMsg.includes('quota') || errorMsg.includes('rate') || errorMsg.includes('limit')) {
+            msgEl.innerHTML = formatMessage('Rate limit reached. Please wait a moment and try again.');
+            return;
+        }
+
+        // Generic error
+        msgEl.innerHTML = formatMessage(`Error: ${error.message}`);
+
     } finally {
         isGenerating = false;
-        updateStatus('ready', 'Ready');
-        enableInputs();
+        if (aiReady) {
+            updateStatus('ready', 'Ready');
+            enableInputs();
+        }
         chatContainer.scrollTop = chatContainer.scrollHeight;
     }
 }
 
-// Add message
+// Add message to chat
 function addMessage(content, role, isLoading = false) {
     const messageDiv = document.createElement('div');
     messageDiv.className = `message ${role}`;
@@ -281,7 +484,21 @@ function addMessage(content, role, isLoading = false) {
     return contentDiv;
 }
 
-// Format message
+// Add system message
+function addSystemMessage(content) {
+    const messageDiv = document.createElement('div');
+    messageDiv.className = 'message system';
+
+    const contentDiv = document.createElement('div');
+    contentDiv.className = 'message-content';
+    contentDiv.innerHTML = formatMessage(content);
+
+    messageDiv.appendChild(contentDiv);
+    chatMessages.appendChild(messageDiv);
+    chatContainer.scrollTop = chatContainer.scrollHeight;
+}
+
+// Format message text
 function formatMessage(text) {
     if (!text) return '';
 
@@ -303,28 +520,22 @@ function formatMessage(text) {
 function handleActionResult(result) {
     if (!result || result.error) {
         if (result?.error) {
-            addMessage(`Action failed: ${result.error}`, 'system');
+            addSystemMessage(`Action failed: ${result.error}`);
         }
         return;
     }
 
     if (result.summary) {
         const s = result.summary;
-        addMessage(`**Inbox:** ${s.total} emails, ${s.unread} unread, ${s.starred} starred`, 'system');
+        addSystemMessage(`**Inbox:** ${s.total} emails, ${s.unread} unread, ${s.starred} starred`);
     }
 
     if (result.email) {
         const e = result.email;
-        addMessage(`**Email:** From ${e.from} | ${e.subject}`, 'system');
+        addSystemMessage(`**Email:** From ${e.from} | ${e.subject}`);
     }
 
     if (result.message) {
-        addMessage(result.message, 'system');
+        addSystemMessage(result.message);
     }
-}
-
-// Disable inputs
-function disableInputs() {
-    sendBtn.disabled = true;
-    quickActions.forEach(btn => btn.disabled = true);
 }
