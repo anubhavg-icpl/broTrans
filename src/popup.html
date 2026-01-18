@@ -3,9 +3,8 @@
 
 <head>
     <meta charset="UTF-8">
-    <meta http-equiv="X-UA-Compatible" content="IE=edge">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>BroTrans - Sentiment Analyzer</title>
+    <title>BroTrans - Gmail Assistant</title>
     <link rel="stylesheet" href="popup.css" />
 </head>
 
@@ -16,58 +15,82 @@
             <div class="logo">
                 <div class="logo-icon">
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" stroke-linecap="round" stroke-linejoin="round"/>
+                        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" stroke-linecap="round" stroke-linejoin="round"/>
                     </svg>
                 </div>
                 <h1>BroTrans</h1>
             </div>
-            <p class="subtitle">AI-Powered Sentiment Analysis</p>
+            <p class="subtitle">Gmail AI Assistant</p>
         </div>
 
-        <!-- Model Status -->
+        <!-- Status -->
         <div id="status-container" class="status-container">
             <div id="status-badge" class="status-badge loading">
                 <div class="status-dot"></div>
-                <span id="status-text">Initializing...</span>
+                <span id="status-text">Checking AI...</span>
             </div>
-            <div id="progress-container" class="progress-container">
-                <div class="progress-bar">
-                    <div id="progress-fill" class="progress-fill"></div>
+            <p id="status-detail" class="status-detail"></p>
+        </div>
+
+        <!-- Chat Messages -->
+        <div id="chat-container" class="chat-container">
+            <div id="chat-messages" class="chat-messages">
+                <div class="message assistant">
+                    <div class="message-content">
+                        <p>Hi! I'm your Gmail assistant powered by Gemini Nano.</p>
+                        <p class="message-hint">Try:</p>
+                        <ul class="suggestions">
+                            <li>"Summarize my inbox"</li>
+                            <li>"Show unread emails"</li>
+                            <li>"Find emails from John"</li>
+                        </ul>
+                    </div>
                 </div>
-                <p id="progress-text" class="progress-text"></p>
             </div>
         </div>
 
-        <!-- Input Area -->
+        <!-- Input -->
         <div class="input-container">
-            <textarea id="text" placeholder="Type or paste text here..." rows="4"></textarea>
-            <div id="char-count" class="char-count"></div>
+            <div class="input-wrapper">
+                <textarea id="user-input" placeholder="Ask about your emails..." rows="1" disabled></textarea>
+                <button id="send-btn" class="send-btn" disabled>
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M22 2L11 13" stroke-linecap="round" stroke-linejoin="round"/>
+                        <path d="M22 2L15 22L11 13L2 9L22 2Z" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                </button>
+            </div>
+            <div class="input-footer">
+                <span id="char-count" class="char-count"></span>
+                <span class="privacy-note">Runs locally via Gemini Nano</span>
+            </div>
         </div>
 
-        <!-- Analyze Button -->
-        <button id="analyze-btn" class="analyze-btn" disabled>
-            <svg class="btn-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M13 10V3L4 14h7v7l9-11h-7z" stroke-linecap="round" stroke-linejoin="round"/>
-            </svg>
-            <span>Analyze Sentiment</span>
-        </button>
-
-        <!-- Result Display -->
-        <div id="result-container" class="result-container hidden">
-            <div id="result-content" class="result-content">
-                <div id="result-icon" class="result-icon"></div>
-                <div class="result-details">
-                    <div id="result-label" class="result-label"></div>
-                    <div class="result-subtitle">Sentiment Detected</div>
-                </div>
-                <div class="result-score">
-                    <div id="score-value" class="score-value"></div>
-                    <div class="score-label">Confidence</div>
-                </div>
-            </div>
-            <div class="confidence-bar">
-                <div id="confidence-fill" class="confidence-fill"></div>
-            </div>
+        <!-- Quick Actions -->
+        <div class="quick-actions">
+            <button class="quick-action" data-action="summarize_inbox" disabled>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/>
+                    <polyline points="22,6 12,13 2,6"/>
+                </svg>
+                Inbox
+            </button>
+            <button class="quick-action" data-action="filter_unread" disabled>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="10"/>
+                    <path d="M12 6v6l4 2"/>
+                </svg>
+                Unread
+            </button>
+            <button class="quick-action" data-action="summarize_email" disabled>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                    <polyline points="14 2 14 8 20 8"/>
+                    <line x1="16" y1="13" x2="8" y2="13"/>
+                    <line x1="16" y1="17" x2="8" y2="17"/>
+                </svg>
+                Summarize
+            </button>
         </div>
 
         <!-- Footer -->
@@ -75,7 +98,7 @@
             <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
                 <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
             </svg>
-            <span>Powered by Transformers.js</span>
+            <span>Gemini Nano - Chrome Built-in AI</span>
         </div>
     </div>
 

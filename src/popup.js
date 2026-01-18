@@ -1,143 +1,228 @@
-// popup.js - handles interaction with the extension's popup
+// popup.js - BroTrans Gmail Assistant with Gemini Nano
 
 // DOM Elements
-const textInput = document.getElementById('text');
-const charCount = document.getElementById('char-count');
-const analyzeBtn = document.getElementById('analyze-btn');
 const statusBadge = document.getElementById('status-badge');
 const statusText = document.getElementById('status-text');
-const progressContainer = document.getElementById('progress-container');
-const progressFill = document.getElementById('progress-fill');
-const progressText = document.getElementById('progress-text');
-const resultContainer = document.getElementById('result-container');
-const resultIcon = document.getElementById('result-icon');
-const resultLabel = document.getElementById('result-label');
-const scoreValue = document.getElementById('score-value');
-const confidenceFill = document.getElementById('confidence-fill');
+const statusDetail = document.getElementById('status-detail');
+const chatContainer = document.getElementById('chat-container');
+const chatMessages = document.getElementById('chat-messages');
+const userInput = document.getElementById('user-input');
+const sendBtn = document.getElementById('send-btn');
+const charCount = document.getElementById('char-count');
+const quickActions = document.querySelectorAll('.quick-action');
 
 // State
-let modelReady = false;
-let isAnalyzing = false;
+let aiReady = false;
+let isGenerating = false;
 
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
-    // Start loading the model
-    loadModel();
+    checkAI();
 
-    // Set up event listeners
-    textInput.addEventListener('input', handleTextInput);
-    analyzeBtn.addEventListener('click', handleAnalyze);
-    textInput.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter' && !e.shiftKey) {
-            e.preventDefault();
-            handleAnalyze();
-        }
+    userInput.addEventListener('input', handleInput);
+    userInput.addEventListener('keydown', handleKeydown);
+    sendBtn.addEventListener('click', handleSend);
+
+    quickActions.forEach(btn => {
+        btn.addEventListener('click', () => handleQuickAction(btn.dataset.action));
     });
 });
 
-// Load the model
-async function loadModel() {
-    updateStatus('loading', 'Loading model...');
-    progressFill.classList.add('indeterminate');
+// Check AI availability
+async function checkAI() {
+    updateStatus('loading', 'Checking AI...');
 
     try {
-        // Send a test message to trigger model loading
-        const response = await chrome.runtime.sendMessage({
-            action: 'classify',
-            text: 'test'
-        });
+        const response = await chrome.runtime.sendMessage({ action: 'check_ai' });
 
-        // Model loaded successfully
-        modelReady = true;
-        updateStatus('ready', 'Ready');
-        progressContainer.classList.add('hidden');
-        analyzeBtn.disabled = !textInput.value.trim();
+        if (response?.available) {
+            // AI available, now load it
+            updateStatus('loading', 'Loading Gemini Nano...');
+            const loadResult = await chrome.runtime.sendMessage({ action: 'load_model' });
 
+            if (loadResult?.success) {
+                aiReady = true;
+                updateStatus('ready', 'Ready');
+                statusDetail.textContent = '';
+                enableInputs();
+            } else {
+                updateStatus('error', 'Load failed');
+                statusDetail.textContent = loadResult?.error || 'Unknown error';
+            }
+        } else {
+            updateStatus('error', 'AI not available');
+            statusDetail.textContent = response?.error || 'Enable Gemini Nano in chrome://flags';
+        }
     } catch (error) {
-        console.error('Model load error:', error);
-        updateStatus('error', 'Failed to load');
+        console.error('[BroTrans] Check AI error:', error);
+        updateStatus('error', 'Error');
+        statusDetail.textContent = error.message;
     }
 }
 
-// Update status badge
+// Update status
 function updateStatus(status, text) {
     statusBadge.className = 'status-badge ' + status;
     statusText.textContent = text;
-
-    if (status === 'ready') {
-        progressContainer.classList.add('hidden');
-    }
 }
 
-// Handle text input
-function handleTextInput(e) {
+// Enable inputs
+function enableInputs() {
+    userInput.disabled = false;
+    userInput.placeholder = 'Ask about your emails...';
+    sendBtn.disabled = false;
+    quickActions.forEach(btn => btn.disabled = false);
+}
+
+// Handle input
+function handleInput(e) {
     const text = e.target.value;
+    charCount.textContent = text.length > 0 ? text.length + ' chars' : '';
 
-    // Update character count
-    if (text.length > 0) {
-        charCount.textContent = text.length + ' chars';
-    } else {
-        charCount.textContent = '';
-    }
+    // Auto-resize
+    userInput.style.height = 'auto';
+    userInput.style.height = Math.min(userInput.scrollHeight, 100) + 'px';
 
-    // Enable/disable button
-    analyzeBtn.disabled = !modelReady || !text.trim() || isAnalyzing;
+    sendBtn.disabled = !aiReady || !text.trim() || isGenerating;
 }
 
-// Handle analyze button click
-async function handleAnalyze() {
-    const text = textInput.value.trim();
-    if (!text || !modelReady || isAnalyzing) return;
+// Handle keyboard
+function handleKeydown(e) {
+    if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        handleSend();
+    }
+}
 
-    isAnalyzing = true;
-    analyzeBtn.disabled = true;
-    analyzeBtn.classList.add('loading');
-    analyzeBtn.querySelector('span').textContent = 'Analyzing...';
+// Handle send
+async function handleSend() {
+    const text = userInput.value.trim();
+    if (!text || !aiReady || isGenerating) return;
 
-    // Hide previous result
-    resultContainer.classList.add('hidden');
+    addMessage(text, 'user');
+
+    userInput.value = '';
+    userInput.style.height = 'auto';
+    charCount.textContent = '';
+    sendBtn.disabled = true;
+
+    await generateResponse(text);
+}
+
+// Handle quick action
+async function handleQuickAction(action) {
+    if (!aiReady || isGenerating) return;
+
+    const messages = {
+        summarize_inbox: 'Summarize my inbox',
+        filter_unread: 'Show my unread emails',
+        summarize_email: 'Summarize the current email',
+    };
+
+    const message = messages[action] || action;
+    addMessage(message, 'user');
+    await generateResponse(message);
+}
+
+// Generate response
+async function generateResponse(userMessage) {
+    isGenerating = true;
+    updateStatus('loading', 'Thinking...');
+    disableInputs();
+
+    const msgEl = addMessage('', 'assistant', true);
 
     try {
         const response = await chrome.runtime.sendMessage({
-            action: 'classify',
-            text: text
+            action: 'chat',
+            userMessage,
         });
 
-        if (response && response.length > 0) {
-            displayResult(response[0]);
+        if (response?.success) {
+            msgEl.innerHTML = formatMessage(response.response);
+
+            if (response.actionResult) {
+                handleActionResult(response.actionResult);
+            }
+        } else {
+            msgEl.innerHTML = formatMessage(`Error: ${response?.error || 'Unknown error'}`);
         }
     } catch (error) {
-        console.error('Classification error:', error);
+        console.error('[BroTrans] Generate error:', error);
+        msgEl.innerHTML = formatMessage(`Error: ${error.message}`);
     } finally {
-        isAnalyzing = false;
-        analyzeBtn.classList.remove('loading');
-        analyzeBtn.querySelector('span').textContent = 'Analyze Sentiment';
-        analyzeBtn.disabled = !textInput.value.trim();
+        isGenerating = false;
+        updateStatus('ready', 'Ready');
+        enableInputs();
+        chatContainer.scrollTop = chatContainer.scrollHeight;
     }
 }
 
-// Display the result
-function displayResult(result) {
-    const isPositive = result.label === 'POSITIVE';
-    const score = Math.round(result.score * 100);
+// Add message
+function addMessage(content, role, isLoading = false) {
+    const messageDiv = document.createElement('div');
+    messageDiv.className = `message ${role}`;
 
-    // Update container class
-    resultContainer.className = 'result-container ' + (isPositive ? 'positive' : 'negative');
+    const contentDiv = document.createElement('div');
+    contentDiv.className = 'message-content';
 
-    // Update icon
-    resultIcon.innerHTML = isPositive
-        ? '<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg>'
-        : '<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M16 16s-1.5-2-4-2-4 2-4 2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg>';
+    if (isLoading) {
+        contentDiv.innerHTML = '<span class="typing-indicator"><span></span><span></span><span></span></span>';
+    } else {
+        contentDiv.innerHTML = formatMessage(content);
+    }
 
-    // Update label
-    resultLabel.textContent = isPositive ? 'Positive' : 'Negative';
+    messageDiv.appendChild(contentDiv);
+    chatMessages.appendChild(messageDiv);
+    chatContainer.scrollTop = chatContainer.scrollHeight;
 
-    // Update score
-    scoreValue.textContent = score + '%';
+    return contentDiv;
+}
 
-    // Update confidence bar
-    confidenceFill.style.width = score + '%';
+// Format message
+function formatMessage(text) {
+    if (!text) return '';
 
-    // Show result
-    resultContainer.classList.remove('hidden');
+    text = text
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+
+    text = text.replace(/```([\s\S]*?)```/g, '<pre>$1</pre>');
+    text = text.replace(/`([^`]+)`/g, '<code>$1</code>');
+    text = text.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+    text = text.replace(/^\s*[-*]\s+(.+)$/gm, '<li>$1</li>');
+    text = text.replace(/\n/g, '<br>');
+
+    return text;
+}
+
+// Handle action result
+function handleActionResult(result) {
+    if (!result || result.error) {
+        if (result?.error) {
+            addMessage(`Action failed: ${result.error}`, 'system');
+        }
+        return;
+    }
+
+    if (result.summary) {
+        const s = result.summary;
+        addMessage(`**Inbox:** ${s.total} emails, ${s.unread} unread, ${s.starred} starred`, 'system');
+    }
+
+    if (result.email) {
+        const e = result.email;
+        addMessage(`**Email:** From ${e.from} | ${e.subject}`, 'system');
+    }
+
+    if (result.message) {
+        addMessage(result.message, 'system');
+    }
+}
+
+// Disable inputs
+function disableInputs() {
+    sendBtn.disabled = true;
+    quickActions.forEach(btn => btn.disabled = true);
 }
