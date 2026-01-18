@@ -429,8 +429,14 @@ function handleKeydown(e) {
     }
 }
 
-// Handle send
+// Handle send (with debounce)
+let lastSend = 0;
 async function handleSend() {
+    // Prevent double-click (500ms debounce)
+    const now = Date.now();
+    if (now - lastSend < 500) return;
+    lastSend = now;
+
     const text = userInput.value.trim();
     if (!text || !aiReady || isGenerating) return;
 
@@ -444,8 +450,14 @@ async function handleSend() {
     await generateResponse(text);
 }
 
-// Handle quick action
+// Handle quick action (with debounce to prevent double-click)
+let lastQuickAction = 0;
 async function handleQuickAction(action) {
+    // Prevent double-click (500ms debounce)
+    const now = Date.now();
+    if (now - lastQuickAction < 500) return;
+    lastQuickAction = now;
+
     if (!aiReady || isGenerating) return;
 
     const messages = {
@@ -507,14 +519,20 @@ async function generateResponse(userMessage) {
         if (emailContext?.error) {
             prompt += `\n\n[Note: ${emailContext.error}]`;
         } else {
-            if (emailContext?.emails?.length > 0) {
-                prompt += '\n\nInbox:\n' + emailContext.emails.slice(0, 10).map((e, i) =>
-                    `${i + 1}. ${e.unread ? '[UNREAD] ' : ''}From: ${e.sender} | ${e.subject}`
+            const emails = emailContext?.emails || [];
+            const unreadCount = emails.filter(e => e.unread).length;
+            const totalVisible = emails.length;
+
+            if (totalVisible > 0) {
+                prompt += `\n\n📧 Inbox (${totalVisible} visible, ${unreadCount} unread):\n`;
+                prompt += emails.slice(0, 25).map((e, i) =>
+                    `${i + 1}. ${e.unread ? '🔵 ' : ''}${e.sender} - "${e.subject}" ${e.snippet ? `(${e.snippet.slice(0, 50)}...)` : ''}`
                 ).join('\n');
             }
+
             if (emailContext?.openEmail) {
                 const e = emailContext.openEmail;
-                prompt += `\n\nOpen email:\nFrom: ${e.sender}\nSubject: ${e.subject}\n${e.body?.slice(0, 300)}...`;
+                prompt += `\n\n📖 Currently Open Email:\nFrom: ${e.sender}\nSubject: ${e.subject}\nContent:\n${e.body?.slice(0, 500)}...`;
             }
         }
 

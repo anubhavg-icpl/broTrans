@@ -23,7 +23,7 @@ function getEmailList() {
     const emails = [];
 
     rows.forEach((row, index) => {
-        if (index >= 20) return; // Limit to 20
+        if (index >= 50) return; // Limit to 50 visible emails
 
         const senderEl = row.querySelector(SELECTORS.sender);
         const subjectEl = row.querySelector(SELECTORS.subject);
