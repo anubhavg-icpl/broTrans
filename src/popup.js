@@ -1,5 +1,5 @@
 // popup.js - BroTrans Gmail Assistant with Transformers.js
-// Uses SmolLM-360M-Instruct for local AI inference
+// Uses Qwen2.5-0.5B-Instruct for local AI inference
 
 import { pipeline, env } from '@huggingface/transformers';
 
@@ -23,8 +23,8 @@ let generator = null;
 let isReady = false;
 let isGenerating = false;
 
-// Model config - SmolLM is small but capable
-const MODEL_ID = 'HuggingFaceTB/SmolLM-360M-Instruct';
+// Model config - Qwen2.5-0.5B is well-tested with transformers.js
+const MODEL_ID = 'onnx-community/Qwen2.5-0.5B-Instruct';
 
 // System prompt for Gmail assistant
 const SYSTEM_PROMPT = `You are BroTrans, a helpful Gmail assistant. Be concise and helpful.
@@ -60,17 +60,19 @@ document.addEventListener('DOMContentLoaded', () => {
 // Load the model
 async function initModel() {
     updateStatus('loading', 'Loading AI model...');
-    statusDetail.textContent = 'First load downloads ~720MB (cached after)';
+    statusDetail.textContent = 'First load downloads ~350MB (cached after)';
 
     try {
         generator = await pipeline('text-generation', MODEL_ID, {
-            dtype: 'q4',  // 4-bit quantization for smaller size
-            device: 'wasm', // Use WASM (works everywhere)
+            dtype: 'q4f16',  // 4-bit quantization
+            device: 'wasm', // Use WASM (works everywhere including M1 Mac)
             progress_callback: (progress) => {
-                if (progress.status === 'downloading') {
+                if (progress.status === 'progress' && progress.total) {
                     const pct = Math.round((progress.loaded / progress.total) * 100);
-                    statusDetail.textContent = `Downloading: ${pct}%`;
-                } else if (progress.status === 'loading') {
+                    if (!isNaN(pct)) {
+                        statusDetail.textContent = `Downloading: ${pct}%`;
+                    }
+                } else if (progress.status === 'ready') {
                     statusDetail.textContent = 'Loading model into memory...';
                 }
             }
