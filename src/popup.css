@@ -373,10 +373,41 @@ body {
 
 .message-content p {
     margin-bottom: 8px;
+    line-height: 1.5;
 }
 
 .message-content p:last-child {
     margin-bottom: 0;
+}
+
+/* Response lists */
+.message-content .response-list {
+    margin: 8px 0;
+    padding-left: 0;
+    list-style: none;
+}
+
+.message-content .response-list li {
+    position: relative;
+    padding: 6px 0 6px 20px;
+    border-bottom: 1px solid var(--md-outline-variant);
+    font-size: 13px;
+    line-height: 1.4;
+}
+
+.message-content .response-list li:last-child {
+    border-bottom: none;
+}
+
+.message-content .response-list li::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 12px;
+    width: 6px;
+    height: 6px;
+    background: var(--md-primary);
+    border-radius: 50%;
 }
 
 .message-hint {

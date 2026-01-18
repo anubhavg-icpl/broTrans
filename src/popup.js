@@ -384,9 +384,6 @@ async function createSession() {
         statusDetail.textContent = '';
         enableInputs();
 
-        // Show success message in chat
-        addSystemMessage('Gemini Nano is ready! Open Gmail and ask me anything about your emails.');
-
     } catch (error) {
         console.error('[BroTrans] AI init error:', error);
         showError('GENERIC', `Initialization failed: ${error.message}`);
@@ -641,18 +638,56 @@ function addSystemMessage(content) {
 function formatMessage(text) {
     if (!text) return '';
 
+    // Escape HTML
     text = text
         .replace(/&/g, '&amp;')
         .replace(/</g, '&lt;')
         .replace(/>/g, '&gt;');
 
+    // Code blocks
     text = text.replace(/```([\s\S]*?)```/g, '<pre>$1</pre>');
     text = text.replace(/`([^`]+)`/g, '<code>$1</code>');
-    text = text.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-    text = text.replace(/^\s*[-*]\s+(.+)$/gm, '<li>$1</li>');
-    text = text.replace(/\n/g, '<br>');
 
-    return text;
+    // Bold
+    text = text.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+
+    // Convert bullet points to proper list
+    const lines = text.split('\n');
+    let inList = false;
+    let result = [];
+
+    for (let line of lines) {
+        const bulletMatch = line.match(/^[\s]*[-*•]\s+(.+)$/);
+        const numberedMatch = line.match(/^[\s]*(\d+)[.)]\s+(.+)$/);
+
+        if (bulletMatch) {
+            if (!inList) {
+                result.push('<ul class="response-list">');
+                inList = true;
+            }
+            result.push(`<li>${bulletMatch[1]}</li>`);
+        } else if (numberedMatch) {
+            if (!inList) {
+                result.push('<ul class="response-list">');
+                inList = true;
+            }
+            result.push(`<li>${numberedMatch[2]}</li>`);
+        } else {
+            if (inList) {
+                result.push('</ul>');
+                inList = false;
+            }
+            if (line.trim()) {
+                result.push(`<p>${line}</p>`);
+            }
+        }
+    }
+
+    if (inList) {
+        result.push('</ul>');
+    }
+
+    return result.join('');
 }
 
 // Handle action result
