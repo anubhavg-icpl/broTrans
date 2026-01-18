@@ -1,4 +1,3 @@
-
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -12,15 +11,27 @@ const config = {
     devtool: 'inline-source-map',
     entry: {
         background: {
-            import: './src/background.js',
+            import: './src/background.ts',
             chunkLoading: `import-scripts`,
         },
-        popup: './src/popup.js',
-        content: './src/content.js',
+        popup: './src/popup.ts',
+        content: './src/content.ts',
     },
     output: {
         path: path.resolve(__dirname, 'build'),
         filename: '[name].js',
+    },
+    resolve: {
+        extensions: ['.ts', '.js'],
+    },
+    module: {
+        rules: [
+            {
+                test: /\.ts$/,
+                use: 'ts-loader',
+                exclude: /node_modules/,
+            },
+        ],
     },
     plugins: [
         new HtmlWebpackPlugin({
@@ -31,7 +42,7 @@ const config = {
             patterns: [
                 {
                     from: "public",
-                    to: "." // Copies to build folder
+                    to: "."
                 },
                 {
                     from: "src/popup.css",
